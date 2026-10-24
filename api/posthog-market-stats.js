@@ -191,15 +191,50 @@ const THEME_EXPR =
   OLD_PLAY_PAGE_IDS.map((id) => `'${id}'`).join(", ") +
   "), 'Play', 'Glow'), properties.theme_name)";
 
-/** Prefer country name, fall back to ISO code; empties become NULL (no null-bucket label). */
+/**
+ * "AE|United Arab Emirates" — code for flags, name for display.
+ * Missing both → filtered client-side as XX|Unknown.
+ */
 const COUNTRY_EXPR =
-  "nullIf(coalesce(" +
-  "nullIf(toString(properties.target_country_name), ''), " +
-  "nullIf(toString(properties.target_country_code), '')" +
-  "), '')";
+  "concat(" +
+  "coalesce(nullIf(toString(properties.target_country_code), ''), 'XX'), " +
+  "'|', " +
+  "coalesce(nullIf(toString(properties.target_country_name), ''), nullIf(toString(properties.target_country_code), ''), 'Unknown')" +
+  ")";
 
 const LANGUAGE_EXPR =
   "nullIf(toString(properties.store_language), '')";
+
+function themeRename(name) {
+  if (name === "Template 3" || name === "template 3") return "Glow / Play";
+  return name;
+}
+
+function mergeGeneratedPublished(generated, published) {
+  const map = new Map();
+  for (const item of generated?.items || []) {
+    map.set(item.name, {
+      name: item.name,
+      code: item.code || null,
+      generated: item.count,
+      published: 0,
+    });
+  }
+  for (const item of published?.items || []) {
+    const cur = map.get(item.name) || {
+      name: item.name,
+      code: item.code || null,
+      generated: 0,
+      published: 0,
+    };
+    cur.published = item.count;
+    if (!cur.code && item.code) cur.code = item.code;
+    map.set(item.name, cur);
+  }
+  return [...map.values()].sort(
+    (a, b) => b.generated + b.published - (a.generated + a.published),
+  );
+}
 
 const LANG_LABELS = {
   en: "English",
@@ -259,33 +294,79 @@ function breakdownLabel(row) {
   return String(raw);
 }
 
-function parseBreakdown(results, { rename } = {}) {
+function parseCountryKey(raw) {
+  const text = String(raw || "");
+  if (text.includes("|")) {
+    const [codePart, ...rest] = text.split("|");
+    const code = String(codePart || "")
+      .trim()
+      .toUpperCase();
+    const name = rest.join("|").trim() || code;
+    return {
+      code: /^[A-Z]{2}$/.test(code) ? code : null,
+      name: name || code || "Unknown",
+    };
+  }
+  const maybeCode = text.trim().toUpperCase();
+  if (/^[A-Z]{2}$/.test(maybeCode)) {
+    return { code: maybeCode, name: maybeCode };
+  }
+  return { code: null, name: text.trim() };
+}
+
+function parseBreakdown(results, { rename, country = false, language = false } = {}) {
   const rows = Array.isArray(results) ? results : [];
   let missing = 0;
   const merged = new Map();
 
   for (const row of rows) {
-    let name = breakdownLabel(row);
+    let label = breakdownLabel(row);
     const count = seriesTotal(row);
     if (count <= 0) continue;
-    if (isNullBreakdownName(name)) {
+    if (isNullBreakdownName(label) || label === "XX|Unknown") {
       missing += count;
       continue;
     }
-    if (typeof rename === "function") {
+
+    let code = null;
+    let name = label;
+    if (country) {
+      const parsed = parseCountryKey(label);
+      code = parsed.code;
+      name = parsed.name;
+      if (!name || isNullBreakdownName(name) || (code === "XX" && name === "Unknown")) {
+        missing += count;
+        continue;
+      }
+    } else if (language) {
+      code = String(label).trim().toLowerCase().split("-")[0];
+      name = languageLabel(code);
+      if (!name) {
+        missing += count;
+        continue;
+      }
+    }
+
+    if (!language && typeof rename === "function") {
       name = rename(name);
       if (!name || isNullBreakdownName(name)) {
         missing += count;
         continue;
       }
     }
-    merged.set(name, (merged.get(name) || 0) + count);
+
+    const key = country || language ? code || name : name;
+    const prev = merged.get(key);
+    if (prev) {
+      prev.count += count;
+      if (!prev.code && code) prev.code = code;
+      if (String(prev.name).length < String(name).length) prev.name = name;
+    } else {
+      merged.set(key, { name, code, count });
+    }
   }
 
-  const items = [...merged.entries()]
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count);
-
+  const items = [...merged.values()].sort((a, b) => b.count - a.count);
   return { items, missing };
 }
 
@@ -296,12 +377,20 @@ function unionBreakdownMax(lists) {
   for (const list of lists) {
     missing = Math.max(missing, list?.missing || 0);
     for (const item of list?.items || []) {
-      merged.set(item.name, Math.max(merged.get(item.name) || 0, item.count));
+      const key = item.code || item.name;
+      const prev = merged.get(key);
+      if (!prev || item.count > prev.count) {
+        merged.set(key, {
+          name: item.name,
+          code: item.code || prev?.code || null,
+          count: item.count,
+        });
+      } else if (prev && !prev.code && item.code) {
+        prev.code = item.code;
+      }
     }
   }
-  const items = [...merged.entries()]
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count);
+  const items = [...merged.values()].sort((a, b) => b.count - a.count);
   return { items, missing };
 }
 
@@ -438,95 +527,129 @@ async function fetchMarketStats(market, range) {
 
 async function fetchMarketBreakdowns(market, range) {
   const prefsStep = [stepProp("market_preferences_saved")];
+  const countryOpts = {
+    breakdown: COUNTRY_EXPR,
+    breakdownType: "hogql",
+    math: "total",
+    limit: 50,
+  };
+  const langOpts = {
+    breakdown: LANGUAGE_EXPR,
+    breakdownType: "hogql",
+    math: "total",
+    limit: 50,
+  };
+
   const [
     countriesPrefs,
-    countriesPdp,
-    countriesStore,
+    countriesPdpGen,
+    countriesPdpPub,
+    countriesStoreGen,
+    countriesStorePub,
     languagesPrefs,
-    languagesPdp,
-    pdpThemesRaw,
-    storeThemesRaw,
+    languagesPdpGen,
+    languagesPdpPub,
+    pdpThemesGen,
+    pdpThemesPub,
+    storeThemesGen,
+    storeThemesPub,
   ] = await Promise.all([
     fetchTrendsBreakdown(market, range, {
       event: "onboarding_step_completed",
       name: "countries_prefs",
       properties: prefsStep,
-      breakdown: COUNTRY_EXPR,
-      breakdownType: "hogql",
-      math: "total",
-      limit: 50,
+      ...countryOpts,
     }),
-    // Also pull countries from generate events — same props PostHog dashboards often use.
     fetchTrendsBreakdown(market, range, {
       event: "pdp_generated",
-      name: "countries_pdp",
-      breakdown: COUNTRY_EXPR,
-      breakdownType: "hogql",
-      math: "total",
-      limit: 50,
+      name: "countries_pdp_gen",
+      ...countryOpts,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "pdp_published",
+      name: "countries_pdp_pub",
+      ...countryOpts,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "store_generated",
-      name: "countries_store",
-      breakdown: COUNTRY_EXPR,
-      breakdownType: "hogql",
-      math: "total",
-      limit: 50,
+      name: "countries_store_gen",
+      ...countryOpts,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "store_published",
+      name: "countries_store_pub",
+      ...countryOpts,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "onboarding_step_completed",
       name: "languages_prefs",
       properties: prefsStep,
-      breakdown: LANGUAGE_EXPR,
-      breakdownType: "hogql",
-      math: "total",
-      limit: 50,
+      ...langOpts,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "pdp_generated",
-      name: "languages_pdp",
-      breakdown: LANGUAGE_EXPR,
-      breakdownType: "hogql",
-      math: "total",
-      limit: 50,
+      name: "languages_pdp_gen",
+      ...langOpts,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "pdp_published",
+      name: "languages_pdp_pub",
+      ...langOpts,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "pdp_generated",
-      name: "pdp_themes",
+      name: "pdp_themes_gen",
+      breakdown: THEME_EXPR,
+      breakdownType: "hogql",
+      limit: 50,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "pdp_published",
+      name: "pdp_themes_pub",
       breakdown: THEME_EXPR,
       breakdownType: "hogql",
       limit: 50,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "store_generated",
-      name: "store_themes",
+      name: "store_themes_gen",
+      breakdown: "theme_name",
+      limit: 50,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "store_published",
+      name: "store_themes_pub",
       breakdown: "theme_name",
       limit: 50,
     }),
   ]);
 
   const countries = unionBreakdownMax([
-    parseBreakdown(countriesPrefs),
-    parseBreakdown(countriesPdp),
-    parseBreakdown(countriesStore),
+    parseBreakdown(countriesPrefs, { country: true }),
+    parseBreakdown(countriesPdpGen, { country: true }),
+    parseBreakdown(countriesPdpPub, { country: true }),
+    parseBreakdown(countriesStoreGen, { country: true }),
+    parseBreakdown(countriesStorePub, { country: true }),
   ]);
   const languages = unionBreakdownMax([
-    parseBreakdown(languagesPrefs, { rename: languageLabel }),
-    parseBreakdown(languagesPdp, { rename: languageLabel }),
+    parseBreakdown(languagesPrefs, { language: true }),
+    parseBreakdown(languagesPdpGen, { language: true }),
+    parseBreakdown(languagesPdpPub, { language: true }),
   ]);
-  const pdpTemplates = parseBreakdown(pdpThemesRaw, {
-    rename: (name) =>
-      name === "Template 3" || name === "template 3" ? "Glow / Play" : name,
-  });
-  const storeTemplates = parseBreakdown(storeThemesRaw);
 
   return {
     countries: countries.items,
     countries_missing: countries.missing,
     languages: languages.items,
     languages_missing: languages.missing,
-    pdp_templates: pdpTemplates.items,
-    store_templates: storeTemplates.items,
+    pdp_templates: mergeGeneratedPublished(
+      parseBreakdown(pdpThemesGen, { rename: themeRename }),
+      parseBreakdown(pdpThemesPub, { rename: themeRename }),
+    ),
+    store_templates: mergeGeneratedPublished(
+      parseBreakdown(storeThemesGen, { rename: themeRename }),
+      parseBreakdown(storeThemesPub, { rename: themeRename }),
+    ),
   };
 }
 

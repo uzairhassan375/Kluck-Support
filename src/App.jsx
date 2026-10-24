@@ -25,42 +25,75 @@ const PAGES = [
   },
 ];
 
-const STAT_CARDS = [
-  { key: "market_prefs", label: "Market prefs" },
-  { key: "product_flow", label: "Product flow" },
-  { key: "store_flow", label: "Store flow" },
-  { key: "pdp_generated", label: "PDP generated" },
-  { key: "pdp_published", label: "PDP published" },
-  { key: "store_generated", label: "Store generated" },
-  { key: "store_published", label: "Store published" },
-  { key: "checkout_started", label: "Checkout started" },
-  { key: "paid", label: "Paid users" },
+const KPI_GROUPS = [
+  {
+    title: "Onboarding",
+    cards: [
+      { key: "market_prefs", label: "Market prefs" },
+      { key: "product_flow", label: "Product flow" },
+      { key: "store_flow", label: "Store flow" },
+    ],
+  },
+  {
+    title: "Output",
+    cards: [
+      { key: "pdp_generated", label: "PDP generated" },
+      { key: "pdp_published", label: "PDP published" },
+      { key: "store_generated", label: "Store generated" },
+      { key: "store_published", label: "Store published" },
+    ],
+  },
+  {
+    title: "Revenue",
+    accent: true,
+    cards: [
+      { key: "checkout_started", label: "Checkout started" },
+      { key: "paid", label: "Paid users" },
+    ],
+  },
 ];
 
-const BREAKDOWN_SECTIONS = [
-  {
-    key: "countries",
-    missingKey: "countries_missing",
-    title: "Target audience (country)",
-    empty: "No country data in this range",
-  },
-  {
-    key: "languages",
-    missingKey: "languages_missing",
-    title: "Store language",
-    empty: "No language data in this range",
-  },
-  {
-    key: "pdp_templates",
-    title: "PDP templates generated",
-    empty: "No PDP templates in this range",
-  },
-  {
-    key: "store_templates",
-    title: "Store templates generated",
-    empty: "No store templates in this range",
-  },
-];
+const LANG_FLAGS = {
+  en: "🇬🇧",
+  zh: "🇨🇳",
+  es: "🇪🇸",
+  hi: "🇮🇳",
+  ar: "🇸🇦",
+  fr: "🇫🇷",
+  pt: "🇵🇹",
+  ru: "🇷🇺",
+  de: "🇩🇪",
+  ja: "🇯🇵",
+  ko: "🇰🇷",
+  it: "🇮🇹",
+  tr: "🇹🇷",
+  id: "🇮🇩",
+  vi: "🇻🇳",
+  th: "🇹🇭",
+};
+
+function flagFromCountryCode(code) {
+  const cc = String(code || "")
+    .trim()
+    .toUpperCase();
+  if (!/^[A-Z]{2}$/.test(cc) || cc === "XX") return "🌍";
+  return String.fromCodePoint(
+    ...[...cc].map((ch) => 127397 + ch.charCodeAt(0)),
+  );
+}
+
+function formatInt(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString();
+}
+
+function publishRate(generated, published) {
+  const g = Number(generated) || 0;
+  const p = Number(published) || 0;
+  if (!g) return p ? "—" : "0%";
+  return `${Math.round((1000 * p) / g) / 10}%`;
+}
 
 const DATE_PRESETS = [
   { value: "today", label: "Today" },
@@ -114,47 +147,66 @@ function funnelConversion(steps, index) {
   return `${Math.round((cur / prev) * 1000) / 10}%`;
 }
 
-function BreakdownList({ market, sectionKey, title, empty, items, missing }) {
+function ShareList({
+  market,
+  sectionKey,
+  title,
+  hint,
+  empty,
+  items,
+  missing,
+  kind,
+}) {
   const rows = Array.isArray(items) ? items : [];
   const knownTotal = rows.reduce((sum, r) => sum + (r.count || 0), 0);
   const max = Math.max(1, ...rows.map((r) => r.count || 0));
   const missingCount = Number(missing) || 0;
 
   return (
-    <div className="breakdown-block">
-      <div className="breakdown-head">
-        <h3>{title}</h3>
+    <div className="stats-section">
+      <div className="stats-section-head">
+        <div>
+          <h3>{title}</h3>
+          {hint ? <p className="stats-section-hint">{hint}</p> : null}
+        </div>
         {rows.length > 0 ? (
-          <span className="breakdown-meta">
-            {rows.length} {rows.length === 1 ? "value" : "values"}
-          </span>
+          <span className="breakdown-meta">{rows.length}</span>
         ) : null}
       </div>
       {rows.length === 0 ? (
         <p className="breakdown-empty">{empty}</p>
       ) : (
-        <ul className="breakdown-list">
+        <ul className="share-list">
           {rows.map((row) => {
             const pct =
               knownTotal > 0
                 ? Math.round((1000 * (row.count || 0)) / knownTotal) / 10
                 : 0;
+            let emoji = "•";
+            if (kind === "country") emoji = flagFromCountryCode(row.code);
+            if (kind === "language") {
+              emoji = LANG_FLAGS[row.code] || "🌐";
+            }
             return (
-              <li key={`${market}-${sectionKey}-${row.name}`}>
-                <div className="breakdown-row">
-                  <span className="breakdown-name" title={row.name}>
+              <li key={`${market}-${sectionKey}-${row.code || row.name}`}>
+                <div className="share-row">
+                  <span className="share-flag" aria-hidden>
+                    {emoji}
+                  </span>
+                  <span className="share-name" title={row.name}>
                     {row.name}
+                    {kind === "country" && row.code ? (
+                      <span className="share-code">{row.code}</span>
+                    ) : null}
                   </span>
-                  <span className="breakdown-stats">
-                    <span className="breakdown-pct">{pct}%</span>
-                    <span className="breakdown-count">{row.count}</span>
-                  </span>
+                  <span className="share-pct">{pct}%</span>
+                  <span className="share-count">{formatInt(row.count)}</span>
                 </div>
                 <div className="breakdown-bar-track">
                   <div
                     className="breakdown-bar-fill"
                     style={{
-                      width: `${Math.max(3, (100 * (row.count || 0)) / max)}%`,
+                      width: `${Math.max(4, (100 * (row.count || 0)) / max)}%`,
                     }}
                   />
                 </div>
@@ -165,10 +217,74 @@ function BreakdownList({ market, sectionKey, title, empty, items, missing }) {
       )}
       {missingCount > 0 ? (
         <p className="breakdown-missing">
-          {missingCount} event{missingCount === 1 ? "" : "s"} had no value set
-          (hidden from the list).
+          {formatInt(missingCount)} without a value (hidden)
         </p>
       ) : null}
+    </div>
+  );
+}
+
+function TemplateTable({ market, title, hint, empty, items }) {
+  const rows = Array.isArray(items) ? items : [];
+  const maxGen = Math.max(1, ...rows.map((r) => r.generated || 0));
+
+  return (
+    <div className="stats-section">
+      <div className="stats-section-head">
+        <div>
+          <h3>{title}</h3>
+          {hint ? <p className="stats-section-hint">{hint}</p> : null}
+        </div>
+      </div>
+      {rows.length === 0 ? (
+        <p className="breakdown-empty">{empty}</p>
+      ) : (
+        <div className="template-table">
+          <div className="template-table-head">
+            <span>Template</span>
+            <span>Generated</span>
+            <span>Published</span>
+            <span>Rate</span>
+          </div>
+          <ul>
+            {rows.map((row) => (
+              <li key={`${market}-tpl-${row.name}`}>
+                <div className="template-row">
+                  <span className="template-name">{row.name}</span>
+                  <span className="template-gen">{formatInt(row.generated)}</span>
+                  <span className="template-pub">{formatInt(row.published)}</span>
+                  <span className="template-rate">
+                    {publishRate(row.generated, row.published)}
+                  </span>
+                </div>
+                <div className="template-bars">
+                  <div className="breakdown-bar-track">
+                    <div
+                      className="breakdown-bar-fill gen-fill"
+                      style={{
+                        width: `${Math.max(3, (100 * (row.generated || 0)) / maxGen)}%`,
+                      }}
+                      title={`Generated ${row.generated}`}
+                    />
+                  </div>
+                  <div className="breakdown-bar-track">
+                    <div
+                      className="breakdown-bar-fill pub-fill"
+                      style={{
+                        width: `${Math.max(
+                          row.published ? 3 : 0,
+                          (100 * (row.published || 0)) / maxGen,
+                        )}%`,
+                      }}
+                      title={`Published ${row.published}`}
+                    />
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -177,11 +293,21 @@ function MarketColumn({ title, market, data }) {
   const stats = data?.stats || {};
   const funnel = Array.isArray(data?.funnel) ? data.funnel : [];
   const maxFunnel = Math.max(1, ...funnel.map((s) => s.count || 0));
+  const pdpPublishRate = publishRate(stats.pdp_generated, stats.pdp_published);
+  const storePublishRate = publishRate(
+    stats.store_generated,
+    stats.store_published,
+  );
 
   return (
-    <section className="market-col">
+    <section className={`market-col market-col-${market}`}>
       <div className="market-col-head">
-        <h2>{title}</h2>
+        <div>
+          <p className="market-eyebrow">
+            {market === "cod" ? "Cash on delivery" : "Prepaid / online pay"}
+          </p>
+          <h2>{title}</h2>
+        </div>
         {data?.dashboard_url ? (
           <a
             className="market-link"
@@ -189,49 +315,105 @@ function MarketColumn({ title, market, data }) {
             target="_blank"
             rel="noreferrer"
           >
-            Open in PostHog
+            PostHog ↗
           </a>
         ) : null}
       </div>
 
-      <div className="kpi-grid">
-        {STAT_CARDS.map((card) => (
-          <div
-            key={`${market}-${card.key}`}
-            className={
-              card.key === "paid" || card.key === "checkout_started"
-                ? "kpi-card kpi-card-accent"
-                : "kpi-card"
-            }
-          >
-            <span className="kpi-label">{card.label}</span>
-            <span className="kpi-value">{stats[card.key] ?? "—"}</span>
-          </div>
-        ))}
+      <div className="highlight-strip">
+        <div>
+          <span className="highlight-label">PDP publish rate</span>
+          <strong>{pdpPublishRate}</strong>
+        </div>
+        <div>
+          <span className="highlight-label">Store publish rate</span>
+          <strong>{storePublishRate}</strong>
+        </div>
+        <div>
+          <span className="highlight-label">Paid</span>
+          <strong>{formatInt(stats.paid)}</strong>
+        </div>
       </div>
 
-      {BREAKDOWN_SECTIONS.map((section) => (
-        <BreakdownList
-          key={`${market}-${section.key}`}
-          market={market}
-          sectionKey={section.key}
-          title={section.title}
-          empty={section.empty}
-          items={data?.[section.key]}
-          missing={section.missingKey ? data?.[section.missingKey] : 0}
-        />
+      {KPI_GROUPS.map((group) => (
+        <div key={`${market}-${group.title}`} className="kpi-group">
+          <h3 className="kpi-group-title">{group.title}</h3>
+          <div
+            className={
+              group.accent ? "kpi-grid kpi-grid-revenue" : "kpi-grid"
+            }
+          >
+            {group.cards.map((card) => (
+              <div
+                key={`${market}-${card.key}`}
+                className={group.accent ? "kpi-card kpi-card-accent" : "kpi-card"}
+              >
+                <span className="kpi-label">{card.label}</span>
+                <span className="kpi-value">
+                  {formatInt(stats[card.key])}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       ))}
 
-      <div className="funnel-block">
-        <h3>Onboarding funnel</h3>
+      <ShareList
+        market={market}
+        sectionKey="countries"
+        title="Target audience"
+        hint="Countries from prefs, generated, and published events"
+        empty="No country data in this range"
+        items={data?.countries}
+        missing={data?.countries_missing}
+        kind="country"
+      />
+
+      <ShareList
+        market={market}
+        sectionKey="languages"
+        title="Store language"
+        hint="Language chosen for the storefront"
+        empty="No language data in this range"
+        items={data?.languages}
+        missing={data?.languages_missing}
+        kind="language"
+      />
+
+      <TemplateTable
+        market={market}
+        title="PDP templates"
+        hint="Generated vs published by theme name"
+        empty="No PDP templates in this range"
+        items={data?.pdp_templates}
+      />
+
+      <TemplateTable
+        market={market}
+        title="Store templates"
+        hint="Generated vs published by theme name"
+        empty="No store templates in this range"
+        items={data?.store_templates}
+      />
+
+      <div className="stats-section">
+        <div className="stats-section-head">
+          <div>
+            <h3>Onboarding funnel</h3>
+            <p className="stats-section-hint">
+              Prefs → flow → content → PDP published
+            </p>
+          </div>
+        </div>
         <ol className="funnel-list">
           {funnel.map((step, index) => (
             <li key={`${market}-funnel-${step.name}`}>
               <div className="funnel-meta">
                 <span className="funnel-name">
-                  {index + 1}. {step.name}
+                  <span className="funnel-step">{index + 1}</span>
+                  {step.name}
                 </span>
-                <span className="funnel-count">{step.count}</span>
+                <span className="funnel-count">{formatInt(step.count)}</span>
               </div>
               <div className="funnel-bar-track">
                 <div
@@ -840,13 +1022,13 @@ export default function App() {
           {page === "stats" ? (
             <div className="stats-page">
               <p className="stats-note">
-                Same PostHog events as the COD / Prepaid dashboards — Support only
-                reads them.
+                COD vs prepaid side by side — KPIs, countries, languages, templates
+                (generated + published), and funnel.
                 {statsData?.label ? (
                   <>
                     {" "}
-                    Showing <strong>{statsData.label}</strong>
-                    {statsData.days ? ` (${statsData.days}d)` : ""}.
+                    Range: <strong>{statsData.label}</strong>
+                    {statsData.days ? ` · ${statsData.days}d` : ""}.
                   </>
                 ) : null}
               </p>
