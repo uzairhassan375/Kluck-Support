@@ -283,8 +283,21 @@ export default async function handler(req, res) {
     return;
   }
 
+  if (!supportSecret()) {
+    json(res, 503, {
+      success: false,
+      error:
+        "SUPPORT_ADMIN_TOKEN_SECRET (or SUPPORT_ADMIN_PASSWORD) is not set on Vercel — must match the Kluck API so your login token validates here.",
+    });
+    return;
+  }
+
   if (!supportAuthorized(req)) {
-    json(res, 401, { success: false, error: "Login required" });
+    json(res, 401, {
+      success: false,
+      error:
+        "Login required — Vercel token secret may not match the API (SUPPORT_ADMIN_TOKEN_SECRET / SUPPORT_ADMIN_PASSWORD).",
+    });
     return;
   }
 

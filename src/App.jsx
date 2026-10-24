@@ -261,11 +261,14 @@ export default function App() {
       setStatsData(data);
       setStatsLoaded(true);
     } catch (err) {
-      if (err.message === "Login required") {
-        sessionStorage.removeItem(TOKEN_KEY);
-        setToken("");
-      }
-      setStatsError(err.message);
+      // Do not clear the session here. Login tokens are issued by the Fly API;
+      // a 401 from this Vercel route usually means SUPPORT_ADMIN_TOKEN_SECRET
+      // (or PASSWORD) is missing/mismatched on Vercel — not that the user logged out.
+      const message =
+        err.message === "Login required"
+          ? "Stats auth failed. On Vercel set SUPPORT_ADMIN_TOKEN_SECRET (or SUPPORT_ADMIN_PASSWORD) to the same value as the Kluck API."
+          : err.message;
+      setStatsError(message);
       setStatsLoaded(true);
     } finally {
       setStatsBusy(false);
