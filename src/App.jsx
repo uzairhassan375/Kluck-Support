@@ -35,11 +35,31 @@ const STAT_CARDS = [
   { key: "store_published", label: "Store published" },
 ];
 
-const DATE_OPTIONS = [
+const DATE_PRESETS = [
+  { value: "today", label: "Today" },
+  { value: "yesterday", label: "Yesterday" },
   { value: "-7d", label: "7 days" },
   { value: "-30d", label: "30 days" },
   { value: "-90d", label: "90 days" },
+  { value: "custom", label: "Custom" },
 ];
+
+function todayIso() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function daysAgoIso(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 async function readJson(response) {
   const data = await response.json().catch(() => ({}));
@@ -207,7 +227,10 @@ export default function App() {
   const [excludeOk, setExcludeOk] = useState("");
   const [excludeLoaded, setExcludeLoaded] = useState(false);
 
-  const [statsDateFrom, setStatsDateFrom] = useState("-30d");
+  const [statsPreset, setStatsPreset] = useState("-30d");
+  const [statsCustomFrom, setStatsCustomFrom] = useState(() => daysAgoIso(7));
+  const [statsCustomTo, setStatsCustomTo] = useState(() => todayIso());
+  const [statsRangeKey, setStatsRangeKey] = useState("-30d");
   const [statsData, setStatsData] = useState(null);
   const [statsBusy, setStatsBusy] = useState(false);
   const [statsError, setStatsError] = useState("");
@@ -249,12 +272,20 @@ export default function App() {
     };
   }, [token, loadExcluded]);
 
-  const loadStats = useCallback(async (authToken, dateFrom) => {
+  const loadStats = useCallback(async (authToken, rangeKey) => {
     setStatsBusy(true);
     setStatsError("");
     try {
+      const params = new URLSearchParams();
+      if (rangeKey.startsWith("custom:")) {
+        const [, from, to] = rangeKey.split(":");
+        params.set("date_from", from);
+        params.set("date_to", to || from);
+      } else {
+        params.set("preset", rangeKey);
+      }
       const data = await readJson(
-        await fetch(`/api/posthog-market-stats?date_from=${encodeURIComponent(dateFrom)}`, {
+        await fetch(`/api/posthog-market-stats?${params}`, {
           headers: { Authorization: `Bearer ${authToken}` },
         }),
       );
@@ -277,8 +308,33 @@ export default function App() {
 
   useEffect(() => {
     if (!token || page !== "stats") return;
-    void loadStats(token, statsDateFrom);
-  }, [token, page, statsDateFrom, loadStats]);
+    void loadStats(token, statsRangeKey);
+  }, [token, page, statsRangeKey, loadStats]);
+
+  function selectPreset(value) {
+    setStatsPreset(value);
+    if (value === "custom") return;
+    setStatsRangeKey(value);
+  }
+
+  function applyCustomRange(event) {
+    event?.preventDefault?.();
+    if (!statsCustomFrom) {
+      setStatsError("Pick a start date");
+      return;
+    }
+    let from = statsCustomFrom;
+    let to = statsCustomTo || statsCustomFrom;
+    if (to < from) {
+      const tmp = from;
+      from = to;
+      to = tmp;
+      setStatsCustomFrom(from);
+      setStatsCustomTo(to);
+    }
+    setStatsPreset("custom");
+    setStatsRangeKey(`custom:${from}:${to}`);
+  }
 
   function goTo(next) {
     setPage(next);
@@ -516,20 +572,52 @@ export default function App() {
             </div>
           ) : null}
           {page === "stats" ? (
-            <div className="date-pills" role="group" aria-label="Date range">
-              {DATE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  className={
-                    statsDateFrom === opt.value ? "date-pill active" : "date-pill"
-                  }
-                  disabled={statsBusy}
-                  onClick={() => setStatsDateFrom(opt.value)}
-                >
-                  {opt.label}
-                </button>
-              ))}
+            <div className="date-filters">
+              <div className="date-pills" role="group" aria-label="Date range">
+                {DATE_PRESETS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className={
+                      statsPreset === opt.value ? "date-pill active" : "date-pill"
+                    }
+                    disabled={statsBusy}
+                    onClick={() => selectPreset(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {statsPreset === "custom" ? (
+                <form className="custom-range" onSubmit={applyCustomRange}>
+                  <label>
+                    From
+                    <input
+                      type="date"
+                      value={statsCustomFrom}
+                      max={todayIso()}
+                      disabled={statsBusy}
+                      onChange={(e) => setStatsCustomFrom(e.target.value)}
+                      required
+                    />
+                  </label>
+                  <label>
+                    To
+                    <input
+                      type="date"
+                      value={statsCustomTo}
+                      max={todayIso()}
+                      min={statsCustomFrom || undefined}
+                      disabled={statsBusy}
+                      onChange={(e) => setStatsCustomTo(e.target.value)}
+                      required
+                    />
+                  </label>
+                  <button type="submit" className="btn-primary" disabled={statsBusy}>
+                    Apply
+                  </button>
+                </form>
+              ) : null}
             </div>
           ) : null}
         </header>
@@ -648,7 +736,14 @@ export default function App() {
             <div className="stats-page">
               <p className="stats-note">
                 Same PostHog events as the COD / Prepaid dashboards — Support only
-                reads them. Set <code>POSTHOG_PERSONAL_API_KEY</code> on Vercel to enable.
+                reads them.
+                {statsData?.label ? (
+                  <>
+                    {" "}
+                    Showing <strong>{statsData.label}</strong>
+                    {statsData.days ? ` (${statsData.days}d)` : ""}.
+                  </>
+                ) : null}
               </p>
               {statsError ? <p className="error">{statsError}</p> : null}
               {!statsLoaded || statsBusy ? (

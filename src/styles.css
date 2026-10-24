@@ -345,10 +345,18 @@ button {
   max-width: 1120px;
 }
 
+.date-filters {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
 .date-pills {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .date-pill {
@@ -367,6 +375,41 @@ button {
   background: var(--navy);
   border-color: var(--navy);
   color: #fff;
+}
+
+.custom-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.custom-range label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.custom-range input[type="date"] {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.custom-range .btn-primary {
+  padding: 8px 14px;
+  font-size: 13px;
 }
 
 .stats-page {
@@ -861,7 +904,15 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .date-pills {
+  .date-filters,
+  .date-pills,
+  .custom-range {
+    width: 100%;
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .custom-range .btn-primary {
     width: 100%;
   }
 }

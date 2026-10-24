@@ -4,12 +4,94 @@
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-const ALLOWED_DATE_FROM = new Set(["-7d", "-30d", "-90d"]);
+/** Relative presets PostHog understands (calendar / rolling). */
+const RELATIVE_FROM = new Set([
+  "dStart",
+  "-1dStart",
+  "-7d",
+  "-30d",
+  "-90d",
+]);
+const RELATIVE_TO = new Set(["-1dEnd", "now", "dEnd"]);
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const DASHBOARDS = {
   cod: "https://us.posthog.com/project/296750/dashboard/2252081",
   prepaid: "https://us.posthog.com/project/296750/dashboard/2252082",
 };
+
+function isIsoDate(value) {
+  if (!ISO_DATE.test(value || "")) return false;
+  const t = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(t);
+}
+
+/**
+ * Resolve date_from / date_to from query params.
+ * Presets: today | yesterday | -7d | -30d | -90d
+ * Or absolute ISO dates via date_from + optional date_to.
+ */
+function resolveDateRange(url) {
+  const preset = (url.searchParams.get("preset") || "").trim();
+  let dateFrom = (url.searchParams.get("date_from") || "").trim();
+  let dateTo = (url.searchParams.get("date_to") || "").trim();
+
+  if (preset === "today") {
+    return { date_from: "dStart", date_to: null, label: "Today", days: 1 };
+  }
+  if (preset === "yesterday") {
+    return {
+      date_from: "-1dStart",
+      date_to: "-1dEnd",
+      label: "Yesterday",
+      days: 1,
+    };
+  }
+  if (preset === "-7d" || preset === "-30d" || preset === "-90d") {
+    const days = preset === "-7d" ? 7 : preset === "-90d" ? 90 : 30;
+    return { date_from: preset, date_to: null, label: `${days} days`, days };
+  }
+
+  // Absolute custom range
+  if (isIsoDate(dateFrom)) {
+    if (dateTo && !isIsoDate(dateTo)) dateTo = "";
+    if (dateTo && dateTo < dateFrom) {
+      const tmp = dateFrom;
+      dateFrom = dateTo;
+      dateTo = tmp;
+    }
+    const start = Date.parse(`${dateFrom}T00:00:00Z`);
+    const end = Date.parse(`${(dateTo || dateFrom)}T00:00:00Z`);
+    const days = Math.max(1, Math.round((end - start) / 86400000) + 1);
+    return {
+      date_from: dateFrom,
+      date_to: dateTo || dateFrom,
+      label: dateTo && dateTo !== dateFrom ? `${dateFrom} → ${dateTo}` : dateFrom,
+      days,
+    };
+  }
+
+  // Legacy / relative raw values
+  if (RELATIVE_FROM.has(dateFrom)) {
+    if (dateFrom === "dStart") {
+      return { date_from: "dStart", date_to: null, label: "Today", days: 1 };
+    }
+    if (dateFrom === "-1dStart") {
+      const to = RELATIVE_TO.has(dateTo) ? dateTo : "-1dEnd";
+      return { date_from: "-1dStart", date_to: to, label: "Yesterday", days: 1 };
+    }
+    const days = dateFrom === "-7d" ? 7 : dateFrom === "-90d" ? 90 : 30;
+    return { date_from: dateFrom, date_to: null, label: `${days} days`, days };
+  }
+
+  return { date_from: "-30d", date_to: null, label: "30 days", days: 30 };
+}
+
+function posthogDateRange(range) {
+  const out = { date_from: range.date_from };
+  if (range.date_to) out.date_to = range.date_to;
+  return out;
+}
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -45,12 +127,6 @@ function supportAuthorized(req) {
   } catch {
     return false;
   }
-}
-
-function daysFromDateFrom(dateFrom) {
-  if (dateFrom === "-7d") return 7;
-  if (dateFrom === "-90d") return 90;
-  return 30;
 }
 
 async function posthogQuery(query) {
@@ -117,7 +193,7 @@ function seriesTotal(resultRow) {
   return 0;
 }
 
-async function fetchMarketStats(market, dateFrom) {
+async function fetchMarketStats(market, range) {
   const props = [marketFilter(market)];
   const trends = await posthogQuery({
     kind: "TrendsQuery",
@@ -168,7 +244,7 @@ async function fetchMarketStats(market, dateFrom) {
         math: "total",
       },
     ],
-    dateRange: { date_from: dateFrom },
+    dateRange: posthogDateRange(range),
     interval: "day",
     filterTestAccounts: true,
     properties: props,
@@ -191,7 +267,7 @@ async function fetchMarketStats(market, dateFrom) {
   };
 }
 
-async function fetchMarketFunnel(market, dateFrom) {
+async function fetchMarketFunnel(market, range) {
   const funnel = await posthogQuery({
     kind: "FunnelsQuery",
     series: [
@@ -221,7 +297,7 @@ async function fetchMarketFunnel(market, dateFrom) {
         name: "PDP published",
       },
     ],
-    dateRange: { date_from: dateFrom },
+    dateRange: posthogDateRange(range),
     filterTestAccounts: true,
     properties: [marketFilter(market)],
     funnelsFilter: {
@@ -257,10 +333,10 @@ async function fetchMarketFunnel(market, dateFrom) {
   });
 }
 
-async function loadMarket(market, dateFrom) {
+async function loadMarket(market, range) {
   const [stats, funnel] = await Promise.all([
-    fetchMarketStats(market, dateFrom),
-    fetchMarketFunnel(market, dateFrom),
+    fetchMarketStats(market, range),
+    fetchMarketFunnel(market, range),
   ]);
   return {
     stats,
@@ -302,18 +378,20 @@ export default async function handler(req, res) {
   }
 
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-  let dateFrom = url.searchParams.get("date_from") || "-30d";
-  if (!ALLOWED_DATE_FROM.has(dateFrom)) dateFrom = "-30d";
+  const range = resolveDateRange(url);
 
   try {
     const [cod, prepaid] = await Promise.all([
-      loadMarket("cod", dateFrom),
-      loadMarket("prepaid", dateFrom),
+      loadMarket("cod", range),
+      loadMarket("prepaid", range),
     ]);
     json(res, 200, {
       success: true,
-      date_from: dateFrom,
-      days: daysFromDateFrom(dateFrom),
+      preset: url.searchParams.get("preset") || null,
+      date_from: range.date_from,
+      date_to: range.date_to,
+      label: range.label,
+      days: range.days,
       cod,
       prepaid,
     });
