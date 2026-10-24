@@ -341,6 +341,191 @@ button {
   max-width: 760px;
 }
 
+.content-wide {
+  max-width: 1120px;
+}
+
+.date-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.date-pill {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.date-pill.active {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: #fff;
+}
+
+.stats-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.stats-note {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(10, 14, 43, 0.06);
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.stats-note code {
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--ink);
+}
+
+.markets-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.market-col {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 22px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.8) inset,
+    0 16px 40px rgba(40, 24, 8, 0.06);
+}
+
+.market-col-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.market-col-head h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 560;
+  letter-spacing: -0.03em;
+}
+
+.market-link {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--navy);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.market-link:hover {
+  text-decoration: underline;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #faf7f2;
+}
+
+.kpi-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.kpi-value {
+  font-family: var(--display);
+  font-size: 26px;
+  font-weight: 560;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.funnel-block h3 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.funnel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.funnel-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.funnel-name {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+
+.funnel-count {
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 560;
+}
+
+.funnel-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(10, 14, 43, 0.08);
+  overflow: hidden;
+}
+
+.funnel-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--navy);
+}
+
+.funnel-conv {
+  margin: 5px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -669,6 +854,14 @@ button:disabled {
   }
 
   .add-row .btn-primary {
+    width: 100%;
+  }
+
+  .markets-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .date-pills {
     width: 100%;
   }
 }

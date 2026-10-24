@@ -18,6 +18,27 @@ const PAGES = [
     label: "PostHog excluded stores",
     hint: "No events or replay",
   },
+  {
+    id: "stats",
+    label: "Market flow stats",
+    hint: "COD vs prepaid funnel",
+  },
+];
+
+const STAT_CARDS = [
+  { key: "market_prefs", label: "Market prefs" },
+  { key: "product_flow", label: "Product flow" },
+  { key: "store_flow", label: "Store flow" },
+  { key: "pdp_generated", label: "PDP generated" },
+  { key: "pdp_published", label: "PDP published" },
+  { key: "store_generated", label: "Store generated" },
+  { key: "store_published", label: "Store published" },
+];
+
+const DATE_OPTIONS = [
+  { value: "-7d", label: "7 days" },
+  { value: "-30d", label: "30 days" },
+  { value: "-90d", label: "90 days" },
 ];
 
 async function readJson(response) {
@@ -31,11 +52,81 @@ async function readJson(response) {
 function readPage() {
   try {
     const raw = sessionStorage.getItem(PAGE_KEY);
-    if (raw === "credits" || raw === "posthog") return raw;
+    if (raw === "credits" || raw === "posthog" || raw === "stats") return raw;
   } catch {
     /* ignore */
   }
   return "credits";
+}
+
+function funnelConversion(steps, index) {
+  if (index <= 0) return null;
+  const prev = steps[index - 1]?.count ?? 0;
+  const cur = steps[index]?.count ?? 0;
+  if (!prev) return prev === 0 && cur === 0 ? "—" : "0%";
+  return `${Math.round((cur / prev) * 1000) / 10}%`;
+}
+
+function MarketColumn({ title, market, data }) {
+  const stats = data?.stats || {};
+  const funnel = Array.isArray(data?.funnel) ? data.funnel : [];
+  const maxFunnel = Math.max(1, ...funnel.map((s) => s.count || 0));
+
+  return (
+    <section className="market-col">
+      <div className="market-col-head">
+        <h2>{title}</h2>
+        {data?.dashboard_url ? (
+          <a
+            className="market-link"
+            href={data.dashboard_url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open in PostHog
+          </a>
+        ) : null}
+      </div>
+
+      <div className="kpi-grid">
+        {STAT_CARDS.map((card) => (
+          <div key={`${market}-${card.key}`} className="kpi-card">
+            <span className="kpi-label">{card.label}</span>
+            <span className="kpi-value">{stats[card.key] ?? "—"}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="funnel-block">
+        <h3>Onboarding funnel</h3>
+        <ol className="funnel-list">
+          {funnel.map((step, index) => (
+            <li key={`${market}-funnel-${step.name}`}>
+              <div className="funnel-meta">
+                <span className="funnel-name">
+                  {index + 1}. {step.name}
+                </span>
+                <span className="funnel-count">{step.count}</span>
+              </div>
+              <div className="funnel-bar-track">
+                <div
+                  className="funnel-bar-fill"
+                  style={{
+                    width: `${Math.max(4, (100 * (step.count || 0)) / maxFunnel)}%`,
+                  }}
+                />
+              </div>
+              {index > 0 ? (
+                <p className="funnel-conv">
+                  {funnelConversion(funnel, index)} from previous step
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+  );
 }
 
 function IconCredits() {
@@ -79,9 +170,23 @@ function IconPosthog() {
   );
 }
 
+function IconStats() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M5 19V10M12 19V5M19 19v-7"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 const ICONS = {
   credits: IconCredits,
   posthog: IconPosthog,
+  stats: IconStats,
 };
 
 export default function App() {
@@ -101,6 +206,12 @@ export default function App() {
   const [excludeError, setExcludeError] = useState("");
   const [excludeOk, setExcludeOk] = useState("");
   const [excludeLoaded, setExcludeLoaded] = useState(false);
+
+  const [statsDateFrom, setStatsDateFrom] = useState("-30d");
+  const [statsData, setStatsData] = useState(null);
+  const [statsBusy, setStatsBusy] = useState(false);
+  const [statsError, setStatsError] = useState("");
+  const [statsLoaded, setStatsLoaded] = useState(false);
 
   const loadExcluded = useCallback(async (authToken) => {
     const data = await readJson(
@@ -137,6 +248,34 @@ export default function App() {
       cancelled = true;
     };
   }, [token, loadExcluded]);
+
+  const loadStats = useCallback(async (authToken, dateFrom) => {
+    setStatsBusy(true);
+    setStatsError("");
+    try {
+      const data = await readJson(
+        await fetch(`/api/posthog-market-stats?date_from=${encodeURIComponent(dateFrom)}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        }),
+      );
+      setStatsData(data);
+      setStatsLoaded(true);
+    } catch (err) {
+      if (err.message === "Login required") {
+        sessionStorage.removeItem(TOKEN_KEY);
+        setToken("");
+      }
+      setStatsError(err.message);
+      setStatsLoaded(true);
+    } finally {
+      setStatsBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!token || page !== "stats") return;
+    void loadStats(token, statsDateFrom);
+  }, [token, page, statsDateFrom, loadStats]);
 
   function goTo(next) {
     setPage(next);
@@ -270,6 +409,9 @@ export default function App() {
     setExcludeOk("");
     setExcludedShops([]);
     setExcludeLoaded(false);
+    setStatsData(null);
+    setStatsError("");
+    setStatsLoaded(false);
   }
 
   if (!token) {
@@ -287,7 +429,7 @@ export default function App() {
           <p className="brand">Kluck</p>
           <h1>Support admin</h1>
           <p className="sub">
-            Sign in to grant credits and manage PostHog exclusions.
+            Sign in to grant credits, manage PostHog exclusions, and view market flow stats.
           </p>
           {error ? <p className="error">{error}</p> : null}
           <form onSubmit={login}>
@@ -370,9 +512,26 @@ export default function App() {
               <span className="stat-label">excluded</span>
             </div>
           ) : null}
+          {page === "stats" ? (
+            <div className="date-pills" role="group" aria-label="Date range">
+              {DATE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={
+                    statsDateFrom === opt.value ? "date-pill active" : "date-pill"
+                  }
+                  disabled={statsBusy}
+                  onClick={() => setStatsDateFrom(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </header>
 
-        <div className="content">
+        <div className={page === "stats" ? "content content-wide" : "content"}>
           {page === "credits" ? (
             <section className="panel">
               <div className="panel-head">
@@ -421,7 +580,9 @@ export default function App() {
                 </button>
               </form>
             </section>
-          ) : (
+          ) : null}
+
+          {page === "posthog" ? (
             <section className="panel">
               <div className="panel-head">
                 <h2>Exclusion list</h2>
@@ -478,7 +639,29 @@ export default function App() {
                 )}
               </div>
             </section>
-          )}
+          ) : null}
+
+          {page === "stats" ? (
+            <div className="stats-page">
+              <p className="stats-note">
+                Same PostHog events as the COD / Prepaid dashboards — Support only
+                reads them. Set <code>POSTHOG_PERSONAL_API_KEY</code> on Vercel to enable.
+              </p>
+              {statsError ? <p className="error">{statsError}</p> : null}
+              {!statsLoaded || statsBusy ? (
+                <p className="empty">{statsBusy ? "Loading PostHog…" : "Loading…"}</p>
+              ) : (
+                <div className="markets-grid">
+                  <MarketColumn title="COD" market="cod" data={statsData?.cod} />
+                  <MarketColumn
+                    title="Prepaid"
+                    market="prepaid"
+                    data={statsData?.prepaid}
+                  />
+                </div>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
