@@ -191,6 +191,16 @@ const THEME_EXPR =
   OLD_PLAY_PAGE_IDS.map((id) => `'${id}'`).join(", ") +
   "), 'Play', 'Glow'), properties.theme_name)";
 
+/** Prefer country name, fall back to ISO code; empties become NULL (no null-bucket label). */
+const COUNTRY_EXPR =
+  "nullIf(coalesce(" +
+  "nullIf(toString(properties.target_country_name), ''), " +
+  "nullIf(toString(properties.target_country_code), '')" +
+  "), '')";
+
+const LANGUAGE_EXPR =
+  "nullIf(toString(properties.store_language), '')";
+
 const LANG_LABELS = {
   en: "English",
   zh: "Mandarin Chinese",
@@ -223,28 +233,76 @@ function seriesTotal(resultRow) {
   return 0;
 }
 
+function isNullBreakdownName(name) {
+  const n = String(name || "")
+    .trim()
+    .toLowerCase();
+  return (
+    !n ||
+    n === "(none)" ||
+    n === "none" ||
+    n === "null" ||
+    n === "undefined" ||
+    n === "$$_posthog_breakdown_null_$$" ||
+    n.includes("posthog_breakdown_null")
+  );
+}
+
 function breakdownLabel(row) {
   const raw =
     row?.breakdown_value ??
     row?.label ??
     row?.action?.name ??
     "";
-  if (raw === null || raw === undefined || raw === "") return "(none)";
-  if (Array.isArray(raw)) return raw.filter(Boolean).join(", ") || "(none)";
+  if (raw === null || raw === undefined || raw === "") return "";
+  if (Array.isArray(raw)) return raw.filter(Boolean).join(", ");
   return String(raw);
 }
 
 function parseBreakdown(results, { rename } = {}) {
   const rows = Array.isArray(results) ? results : [];
-  const items = rows
-    .map((row) => {
-      let name = breakdownLabel(row);
-      if (typeof rename === "function") name = rename(name) || name;
-      return { name, count: seriesTotal(row) };
-    })
-    .filter((item) => item.count > 0 && item.name !== "(none)");
-  items.sort((a, b) => b.count - a.count);
-  return items;
+  let missing = 0;
+  const merged = new Map();
+
+  for (const row of rows) {
+    let name = breakdownLabel(row);
+    const count = seriesTotal(row);
+    if (count <= 0) continue;
+    if (isNullBreakdownName(name)) {
+      missing += count;
+      continue;
+    }
+    if (typeof rename === "function") {
+      name = rename(name);
+      if (!name || isNullBreakdownName(name)) {
+        missing += count;
+        continue;
+      }
+    }
+    merged.set(name, (merged.get(name) || 0) + count);
+  }
+
+  const items = [...merged.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+
+  return { items, missing };
+}
+
+/** Union labels from several breakdowns; keep the highest count per name (no double-count). */
+function unionBreakdownMax(lists) {
+  const merged = new Map();
+  let missing = 0;
+  for (const list of lists) {
+    missing = Math.max(missing, list?.missing || 0);
+    for (const item of list?.items || []) {
+      merged.set(item.name, Math.max(merged.get(item.name) || 0, item.count));
+    }
+  }
+  const items = [...merged.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+  return { items, missing };
 }
 
 function languageLabel(code) {
@@ -252,7 +310,7 @@ function languageLabel(code) {
     .trim()
     .toLowerCase()
     .split("-")[0];
-  if (!key || key === "(none)" || key === "null") return null;
+  if (!key || isNullBreakdownName(key)) return null;
   return LANG_LABELS[key] || key.toUpperCase();
 }
 
@@ -263,6 +321,7 @@ async function fetchTrendsBreakdown(market, range, {
   breakdown,
   breakdownType = "event",
   math = "total",
+  limit = 50,
 }) {
   const trends = await posthogQuery({
     kind: "TrendsQuery",
@@ -282,7 +341,7 @@ async function fetchTrendsBreakdown(market, range, {
     breakdownFilter: {
       breakdown,
       breakdown_type: breakdownType,
-      breakdown_limit: 25,
+      breakdown_limit: limit,
     },
     trendsFilter: { display: "ActionsBarValue" },
   });
@@ -379,45 +438,95 @@ async function fetchMarketStats(market, range) {
 
 async function fetchMarketBreakdowns(market, range) {
   const prefsStep = [stepProp("market_preferences_saved")];
-  const [countriesRaw, languagesRaw, pdpThemesRaw, storeThemesRaw] =
-    await Promise.all([
-      fetchTrendsBreakdown(market, range, {
-        event: "onboarding_step_completed",
-        name: "countries",
-        properties: prefsStep,
-        breakdown: "target_country_name",
-        math: "dau",
-      }),
-      fetchTrendsBreakdown(market, range, {
-        event: "onboarding_step_completed",
-        name: "languages",
-        properties: prefsStep,
-        breakdown: "store_language",
-        math: "dau",
-      }),
-      fetchTrendsBreakdown(market, range, {
-        event: "pdp_generated",
-        name: "pdp_themes",
-        breakdown: THEME_EXPR,
-        breakdownType: "hogql",
-      }),
-      fetchTrendsBreakdown(market, range, {
-        event: "store_generated",
-        name: "store_themes",
-        breakdown: "theme_name",
-      }),
-    ]);
+  const [
+    countriesPrefs,
+    countriesPdp,
+    countriesStore,
+    languagesPrefs,
+    languagesPdp,
+    pdpThemesRaw,
+    storeThemesRaw,
+  ] = await Promise.all([
+    fetchTrendsBreakdown(market, range, {
+      event: "onboarding_step_completed",
+      name: "countries_prefs",
+      properties: prefsStep,
+      breakdown: COUNTRY_EXPR,
+      breakdownType: "hogql",
+      math: "total",
+      limit: 50,
+    }),
+    // Also pull countries from generate events — same props PostHog dashboards often use.
+    fetchTrendsBreakdown(market, range, {
+      event: "pdp_generated",
+      name: "countries_pdp",
+      breakdown: COUNTRY_EXPR,
+      breakdownType: "hogql",
+      math: "total",
+      limit: 50,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "store_generated",
+      name: "countries_store",
+      breakdown: COUNTRY_EXPR,
+      breakdownType: "hogql",
+      math: "total",
+      limit: 50,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "onboarding_step_completed",
+      name: "languages_prefs",
+      properties: prefsStep,
+      breakdown: LANGUAGE_EXPR,
+      breakdownType: "hogql",
+      math: "total",
+      limit: 50,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "pdp_generated",
+      name: "languages_pdp",
+      breakdown: LANGUAGE_EXPR,
+      breakdownType: "hogql",
+      math: "total",
+      limit: 50,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "pdp_generated",
+      name: "pdp_themes",
+      breakdown: THEME_EXPR,
+      breakdownType: "hogql",
+      limit: 50,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "store_generated",
+      name: "store_themes",
+      breakdown: "theme_name",
+      limit: 50,
+    }),
+  ]);
+
+  const countries = unionBreakdownMax([
+    parseBreakdown(countriesPrefs),
+    parseBreakdown(countriesPdp),
+    parseBreakdown(countriesStore),
+  ]);
+  const languages = unionBreakdownMax([
+    parseBreakdown(languagesPrefs, { rename: languageLabel }),
+    parseBreakdown(languagesPdp, { rename: languageLabel }),
+  ]);
+  const pdpTemplates = parseBreakdown(pdpThemesRaw, {
+    rename: (name) =>
+      name === "Template 3" || name === "template 3" ? "Glow / Play" : name,
+  });
+  const storeTemplates = parseBreakdown(storeThemesRaw);
 
   return {
-    countries: parseBreakdown(countriesRaw),
-    languages: parseBreakdown(languagesRaw, { rename: languageLabel }).filter(
-      (item) => item.name,
-    ),
-    pdp_templates: parseBreakdown(pdpThemesRaw, {
-      rename: (name) =>
-        name === "Template 3" || name === "template 3" ? "Glow / Play" : name,
-    }),
-    store_templates: parseBreakdown(storeThemesRaw),
+    countries: countries.items,
+    countries_missing: countries.missing,
+    languages: languages.items,
+    languages_missing: languages.missing,
+    pdp_templates: pdpTemplates.items,
+    store_templates: storeTemplates.items,
   };
 }
 

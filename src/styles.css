@@ -524,14 +524,33 @@ button {
   border-bottom: 1px solid var(--line);
 }
 
+.breakdown-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
 .breakdown-block h3,
 .funnel-block h3 {
-  margin: 0 0 12px;
-  font-size: 13px;
+  margin: 0;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+.funnel-block h3 {
+  margin-bottom: 12px;
+}
+
+.breakdown-meta {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .breakdown-list {
@@ -540,17 +559,81 @@ button {
   padding: 0;
   display: flex;
   flex-direction: column;
+  gap: 11px;
+  max-height: 280px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.breakdown-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+}
+
+.breakdown-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 14.5px;
+  font-weight: 650;
+  color: var(--ink);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breakdown-stats {
+  display: inline-flex;
+  align-items: baseline;
   gap: 10px;
+  flex-shrink: 0;
+}
+
+.breakdown-pct {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  min-width: 3.2em;
+  text-align: right;
+}
+
+.breakdown-count {
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 560;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  min-width: 1.5em;
+  text-align: right;
+}
+
+.breakdown-bar-track {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(10, 14, 43, 0.08);
+  overflow: hidden;
+}
+
+.breakdown-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #3d6b5a;
 }
 
 .breakdown-empty {
   margin: 0;
-  font-size: 13px;
+  font-size: 13.5px;
   color: var(--muted);
 }
 
-.breakdown-fill {
-  background: #3d6b5a;
+.breakdown-missing {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
 }
 
 .funnel-list {

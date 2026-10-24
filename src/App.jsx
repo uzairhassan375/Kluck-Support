@@ -40,11 +40,13 @@ const STAT_CARDS = [
 const BREAKDOWN_SECTIONS = [
   {
     key: "countries",
+    missingKey: "countries_missing",
     title: "Target audience (country)",
     empty: "No country data in this range",
   },
   {
     key: "languages",
+    missingKey: "languages_missing",
     title: "Store language",
     empty: "No language data in this range",
   },
@@ -112,35 +114,61 @@ function funnelConversion(steps, index) {
   return `${Math.round((cur / prev) * 1000) / 10}%`;
 }
 
-function BreakdownList({ market, sectionKey, title, empty, items }) {
+function BreakdownList({ market, sectionKey, title, empty, items, missing }) {
   const rows = Array.isArray(items) ? items : [];
+  const knownTotal = rows.reduce((sum, r) => sum + (r.count || 0), 0);
   const max = Math.max(1, ...rows.map((r) => r.count || 0));
+  const missingCount = Number(missing) || 0;
 
   return (
     <div className="breakdown-block">
-      <h3>{title}</h3>
+      <div className="breakdown-head">
+        <h3>{title}</h3>
+        {rows.length > 0 ? (
+          <span className="breakdown-meta">
+            {rows.length} {rows.length === 1 ? "value" : "values"}
+          </span>
+        ) : null}
+      </div>
       {rows.length === 0 ? (
         <p className="breakdown-empty">{empty}</p>
       ) : (
         <ul className="breakdown-list">
-          {rows.map((row) => (
-            <li key={`${market}-${sectionKey}-${row.name}`}>
-              <div className="funnel-meta">
-                <span className="funnel-name">{row.name}</span>
-                <span className="funnel-count">{row.count}</span>
-              </div>
-              <div className="funnel-bar-track">
-                <div
-                  className="funnel-bar-fill breakdown-fill"
-                  style={{
-                    width: `${Math.max(4, (100 * (row.count || 0)) / max)}%`,
-                  }}
-                />
-              </div>
-            </li>
-          ))}
+          {rows.map((row) => {
+            const pct =
+              knownTotal > 0
+                ? Math.round((1000 * (row.count || 0)) / knownTotal) / 10
+                : 0;
+            return (
+              <li key={`${market}-${sectionKey}-${row.name}`}>
+                <div className="breakdown-row">
+                  <span className="breakdown-name" title={row.name}>
+                    {row.name}
+                  </span>
+                  <span className="breakdown-stats">
+                    <span className="breakdown-pct">{pct}%</span>
+                    <span className="breakdown-count">{row.count}</span>
+                  </span>
+                </div>
+                <div className="breakdown-bar-track">
+                  <div
+                    className="breakdown-bar-fill"
+                    style={{
+                      width: `${Math.max(3, (100 * (row.count || 0)) / max)}%`,
+                    }}
+                  />
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
+      {missingCount > 0 ? (
+        <p className="breakdown-missing">
+          {missingCount} event{missingCount === 1 ? "" : "s"} had no value set
+          (hidden from the list).
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -190,6 +218,7 @@ function MarketColumn({ title, market, data }) {
           title={section.title}
           empty={section.empty}
           items={data?.[section.key]}
+          missing={section.missingKey ? data?.[section.missingKey] : 0}
         />
       ))}
 
