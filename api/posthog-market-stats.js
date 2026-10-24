@@ -180,6 +180,36 @@ function stepProp(names) {
   };
 }
 
+/** Remap legacy "Template 3" → Glow / Play (same as product dashboard). */
+const OLD_PLAY_PAGE_IDS = [
+  "e6f8f771-daa4-4f6d-aee3-99344c1acab1",
+  "ee3c9341-c9ea-4526-b1c1-6d3c4805e239",
+];
+const THEME_EXPR =
+  "if(properties.theme_name = 'Template 3', " +
+  "if(toString(properties.page_id) IN (" +
+  OLD_PLAY_PAGE_IDS.map((id) => `'${id}'`).join(", ") +
+  "), 'Play', 'Glow'), properties.theme_name)";
+
+const LANG_LABELS = {
+  en: "English",
+  zh: "Mandarin Chinese",
+  es: "Spanish",
+  hi: "Hindi",
+  ar: "Arabic",
+  fr: "French",
+  pt: "Portuguese",
+  ru: "Russian",
+  de: "German",
+  ja: "Japanese",
+  ko: "Korean",
+  it: "Italian",
+  tr: "Turkish",
+  id: "Indonesian",
+  vi: "Vietnamese",
+  th: "Thai",
+};
+
 /** Sum of series data points (period total). */
 function seriesTotal(resultRow) {
   if (!resultRow) return 0;
@@ -191,6 +221,72 @@ function seriesTotal(resultRow) {
     return Math.round(resultRow.data.reduce((a, b) => a + (Number(b) || 0), 0));
   }
   return 0;
+}
+
+function breakdownLabel(row) {
+  const raw =
+    row?.breakdown_value ??
+    row?.label ??
+    row?.action?.name ??
+    "";
+  if (raw === null || raw === undefined || raw === "") return "(none)";
+  if (Array.isArray(raw)) return raw.filter(Boolean).join(", ") || "(none)";
+  return String(raw);
+}
+
+function parseBreakdown(results, { rename } = {}) {
+  const rows = Array.isArray(results) ? results : [];
+  const items = rows
+    .map((row) => {
+      let name = breakdownLabel(row);
+      if (typeof rename === "function") name = rename(name) || name;
+      return { name, count: seriesTotal(row) };
+    })
+    .filter((item) => item.count > 0 && item.name !== "(none)");
+  items.sort((a, b) => b.count - a.count);
+  return items;
+}
+
+function languageLabel(code) {
+  const key = String(code || "")
+    .trim()
+    .toLowerCase()
+    .split("-")[0];
+  if (!key || key === "(none)" || key === "null") return null;
+  return LANG_LABELS[key] || key.toUpperCase();
+}
+
+async function fetchTrendsBreakdown(market, range, {
+  event,
+  name,
+  properties = [],
+  breakdown,
+  breakdownType = "event",
+  math = "total",
+}) {
+  const trends = await posthogQuery({
+    kind: "TrendsQuery",
+    series: [
+      {
+        kind: "EventsNode",
+        event,
+        name,
+        math,
+        properties,
+      },
+    ],
+    dateRange: posthogDateRange(range),
+    interval: "day",
+    filterTestAccounts: true,
+    properties: [marketFilter(market)],
+    breakdownFilter: {
+      breakdown,
+      breakdown_type: breakdownType,
+      breakdown_limit: 25,
+    },
+    trendsFilter: { display: "ActionsBarValue" },
+  });
+  return trends?.results;
 }
 
 async function fetchMarketStats(market, range) {
@@ -243,6 +339,18 @@ async function fetchMarketStats(market, range) {
         name: "store_published",
         math: "total",
       },
+      {
+        kind: "EventsNode",
+        event: "credits_pack_checkout_started",
+        name: "checkout_started",
+        math: "total",
+      },
+      {
+        kind: "EventsNode",
+        event: "credits_pack_purchased",
+        name: "paid",
+        math: "total",
+      },
     ],
     dateRange: posthogDateRange(range),
     interval: "day",
@@ -264,6 +372,52 @@ async function fetchMarketStats(market, range) {
     pdp_published: byName.pdp_published ?? seriesTotal(rows[4]),
     store_generated: byName.store_generated ?? seriesTotal(rows[5]),
     store_published: byName.store_published ?? seriesTotal(rows[6]),
+    checkout_started: byName.checkout_started ?? seriesTotal(rows[7]),
+    paid: byName.paid ?? seriesTotal(rows[8]),
+  };
+}
+
+async function fetchMarketBreakdowns(market, range) {
+  const prefsStep = [stepProp("market_preferences_saved")];
+  const [countriesRaw, languagesRaw, pdpThemesRaw, storeThemesRaw] =
+    await Promise.all([
+      fetchTrendsBreakdown(market, range, {
+        event: "onboarding_step_completed",
+        name: "countries",
+        properties: prefsStep,
+        breakdown: "target_country_name",
+        math: "dau",
+      }),
+      fetchTrendsBreakdown(market, range, {
+        event: "onboarding_step_completed",
+        name: "languages",
+        properties: prefsStep,
+        breakdown: "store_language",
+        math: "dau",
+      }),
+      fetchTrendsBreakdown(market, range, {
+        event: "pdp_generated",
+        name: "pdp_themes",
+        breakdown: THEME_EXPR,
+        breakdownType: "hogql",
+      }),
+      fetchTrendsBreakdown(market, range, {
+        event: "store_generated",
+        name: "store_themes",
+        breakdown: "theme_name",
+      }),
+    ]);
+
+  return {
+    countries: parseBreakdown(countriesRaw),
+    languages: parseBreakdown(languagesRaw, { rename: languageLabel }).filter(
+      (item) => item.name,
+    ),
+    pdp_templates: parseBreakdown(pdpThemesRaw, {
+      rename: (name) =>
+        name === "Template 3" || name === "template 3" ? "Glow / Play" : name,
+    }),
+    store_templates: parseBreakdown(storeThemesRaw),
   };
 }
 
@@ -334,13 +488,15 @@ async function fetchMarketFunnel(market, range) {
 }
 
 async function loadMarket(market, range) {
-  const [stats, funnel] = await Promise.all([
+  const [stats, funnel, breakdowns] = await Promise.all([
     fetchMarketStats(market, range),
     fetchMarketFunnel(market, range),
+    fetchMarketBreakdowns(market, range),
   ]);
   return {
     stats,
     funnel,
+    ...breakdowns,
     dashboard_url: DASHBOARDS[market],
   };
 }

@@ -33,6 +33,31 @@ const STAT_CARDS = [
   { key: "pdp_published", label: "PDP published" },
   { key: "store_generated", label: "Store generated" },
   { key: "store_published", label: "Store published" },
+  { key: "checkout_started", label: "Checkout started" },
+  { key: "paid", label: "Paid users" },
+];
+
+const BREAKDOWN_SECTIONS = [
+  {
+    key: "countries",
+    title: "Target audience (country)",
+    empty: "No country data in this range",
+  },
+  {
+    key: "languages",
+    title: "Store language",
+    empty: "No language data in this range",
+  },
+  {
+    key: "pdp_templates",
+    title: "PDP templates generated",
+    empty: "No PDP templates in this range",
+  },
+  {
+    key: "store_templates",
+    title: "Store templates generated",
+    empty: "No store templates in this range",
+  },
 ];
 
 const DATE_PRESETS = [
@@ -87,6 +112,39 @@ function funnelConversion(steps, index) {
   return `${Math.round((cur / prev) * 1000) / 10}%`;
 }
 
+function BreakdownList({ market, sectionKey, title, empty, items }) {
+  const rows = Array.isArray(items) ? items : [];
+  const max = Math.max(1, ...rows.map((r) => r.count || 0));
+
+  return (
+    <div className="breakdown-block">
+      <h3>{title}</h3>
+      {rows.length === 0 ? (
+        <p className="breakdown-empty">{empty}</p>
+      ) : (
+        <ul className="breakdown-list">
+          {rows.map((row) => (
+            <li key={`${market}-${sectionKey}-${row.name}`}>
+              <div className="funnel-meta">
+                <span className="funnel-name">{row.name}</span>
+                <span className="funnel-count">{row.count}</span>
+              </div>
+              <div className="funnel-bar-track">
+                <div
+                  className="funnel-bar-fill breakdown-fill"
+                  style={{
+                    width: `${Math.max(4, (100 * (row.count || 0)) / max)}%`,
+                  }}
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function MarketColumn({ title, market, data }) {
   const stats = data?.stats || {};
   const funnel = Array.isArray(data?.funnel) ? data.funnel : [];
@@ -110,12 +168,30 @@ function MarketColumn({ title, market, data }) {
 
       <div className="kpi-grid">
         {STAT_CARDS.map((card) => (
-          <div key={`${market}-${card.key}`} className="kpi-card">
+          <div
+            key={`${market}-${card.key}`}
+            className={
+              card.key === "paid" || card.key === "checkout_started"
+                ? "kpi-card kpi-card-accent"
+                : "kpi-card"
+            }
+          >
             <span className="kpi-label">{card.label}</span>
             <span className="kpi-value">{stats[card.key] ?? "—"}</span>
           </div>
         ))}
       </div>
+
+      {BREAKDOWN_SECTIONS.map((section) => (
+        <BreakdownList
+          key={`${market}-${section.key}`}
+          market={market}
+          sectionKey={section.key}
+          title={section.title}
+          empty={section.empty}
+          items={data?.[section.key]}
+        />
+      ))}
 
       <div className="funnel-block">
         <h3>Onboarding funnel</h3>
