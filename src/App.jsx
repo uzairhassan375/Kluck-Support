@@ -10,7 +10,7 @@ const PAGE_KEY = "kluck_support_page";
 const PAGES = [
   {
     id: "credits",
-    label: "😢 Free users",
+    label: "🎀 Grant credits",
     hint: "Wallet top-ups",
   },
   {
@@ -768,14 +768,28 @@ function MarketsCompare({ cod, prepaid, installs, label, cohort }) {
 }
 
 function IconCredits() {
+  // Gift bow — grant credits
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.75" />
+      <rect
+        x="4"
+        y="10"
+        width="16"
+        height="10"
+        rx="1.5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+      />
       <path
-        d="M12 7.5v9M9.25 10.25c.5-.7 1.35-1.15 2.75-1.15 1.7 0 2.9.85 2.9 2.15S13.7 13.4 12 13.4 9.1 14.25 9.1 15.55c0 1.3 1.2 2.15 2.9 2.15 1.4 0 2.25-.45 2.75-1.15"
+        d="M12 10v10M4 14h16"
         stroke="currentColor"
         strokeWidth="1.75"
         strokeLinecap="round"
+      />
+      <path
+        d="M12 10c-1.8-3.2-5.2-3.5-5.2-1.4C6.8 10.2 9.2 10.8 12 10c2.8.8 5.2.2 5.2-1.4 0-2.1-3.4-1.8-5.2 1.4Z"
+        stroke="currentColor"
+        strokeWidth="1.75"
         strokeLinejoin="round"
       />
     </svg>
