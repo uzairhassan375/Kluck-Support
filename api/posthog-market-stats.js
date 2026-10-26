@@ -531,6 +531,45 @@ async function fetchTrendsBreakdown(market, range, {
   return trends?.results;
 }
 
+/**
+ * App-wide installs / uninstalls (not market-split — events have no market_type).
+ */
+async function fetchInstallStats(range) {
+  const trends = await posthogQuery({
+    kind: "TrendsQuery",
+    series: [
+      {
+        kind: "EventsNode",
+        event: "app_installed",
+        name: "installs",
+        math: "total",
+      },
+      {
+        kind: "EventsNode",
+        event: "app_uninstalled",
+        name: "uninstalls",
+        math: "total",
+      },
+    ],
+    dateRange: posthogDateRange(range),
+    interval: "day",
+    filterTestAccounts: true,
+    trendsFilter: { display: "BoldNumber" },
+  });
+
+  const rows = Array.isArray(trends?.results) ? trends.results : [];
+  const byName = Object.fromEntries(
+    rows.map((row) => [row?.action?.name || row?.label || "", seriesTotal(row)]),
+  );
+  const installs = byName.installs ?? seriesTotal(rows[0]);
+  const uninstalls = byName.uninstalls ?? seriesTotal(rows[1]);
+  return {
+    installs,
+    uninstalls,
+    net: installs - uninstalls,
+  };
+}
+
 async function fetchMarketStats(market, range) {
   const props = [marketFilter(market)];
   const trends = await posthogQuery({
@@ -894,9 +933,10 @@ export default async function handler(req, res) {
   const range = resolveDateRange(url);
 
   try {
-    const [cod, prepaid] = await Promise.all([
+    const [cod, prepaid, installs] = await Promise.all([
       loadMarket("cod", range),
       loadMarket("prepaid", range),
+      fetchInstallStats(range),
     ]);
     json(res, 200, {
       success: true,
@@ -905,6 +945,7 @@ export default async function handler(req, res) {
       date_to: range.date_to,
       label: range.label,
       days: range.days,
+      installs,
       cod,
       prepaid,
     });
