@@ -136,20 +136,20 @@ function supportAuthorized(req) {
 }
 
 /**
- * PostHog query API limits (project-level): 3 concurrent, 240/min, 2400/hour.
- * Pace all Support stats queries through one queue + retry on 429.
+ * PostHog query API limits (project-level): 3 concurrent, hundreds/min.
+ * Support is single-operator — run at the concurrent cap; only back off on 429.
  */
 const POSTHOG_MAX_CONCURRENT = Math.max(
   1,
-  Number(process.env.POSTHOG_MAX_CONCURRENT || 2),
+  Number(process.env.POSTHOG_MAX_CONCURRENT || 3),
 );
 const POSTHOG_MIN_GAP_MS = Math.max(
   0,
-  Number(process.env.POSTHOG_MIN_GAP_MS || 350),
+  Number(process.env.POSTHOG_MIN_GAP_MS || 0),
 );
 const POSTHOG_MAX_RETRIES = Math.max(
   0,
-  Number(process.env.POSTHOG_MAX_RETRIES || 6),
+  Number(process.env.POSTHOG_MAX_RETRIES || 4),
 );
 
 let posthogActive = 0;
@@ -467,12 +467,173 @@ const PAID_COUNTRY_EXPR =
 const LANGUAGE_EXPR =
   "nullIf(toString(properties.store_language), '')";
 
+/**
+ * One row per person who saved market prefs (latest country + language).
+ * Trends DAU + daily bars sum day-uniques and can exceed the green unique count.
+ */
+async function fetchPrefsAudienceUnique(market, range, cohortProps = []) {
+  const data = await posthogQuery({
+    kind: "HogQLQuery",
+    query: `
+SELECT
+  person_id,
+  argMax(${COUNTRY_EXPR}, timestamp) AS country_key,
+  argMax(${LANGUAGE_EXPR}, timestamp) AS language_key
+FROM events
+WHERE event = 'onboarding_step_completed'
+  AND {filters}
+GROUP BY person_id
+`.trim(),
+    filters: {
+      filterTestAccounts: true,
+      dateRange: posthogDateRange(range),
+      properties: [
+        marketFilter(market),
+        stepProp("market_preferences_saved"),
+        ...(cohortProps || []),
+      ],
+    },
+  });
+
+  const rows = Array.isArray(data?.results) ? data.results : [];
+  const countryRows = [];
+  const languageRows = [];
+  for (const row of rows) {
+    const countryKey = Array.isArray(row) ? row[1] : row?.country_key;
+    const languageKey = Array.isArray(row) ? row[2] : row?.language_key;
+    countryRows.push({
+      breakdown_value: countryKey == null ? "" : String(countryKey),
+      aggregated_value: 1,
+    });
+    languageRows.push({
+      breakdown_value: languageKey == null ? "" : String(languageKey),
+      aggregated_value: 1,
+    });
+  }
+
+  const countries = parseBreakdown(countryRows, { country: true });
+  const languages = parseBreakdown(languageRows, { language: true });
+  return {
+    unique_users: rows.length,
+    countries: countries.items,
+    countries_missing: countries.missing,
+    languages: languages.items,
+    languages_missing: languages.missing,
+  };
+}
+
 /** Prefer human label; fall back to raw category slug. */
 const CATEGORY_EXPR =
   "coalesce(" +
   "nullIf(toString(properties.category_label), ''), " +
   "nullIf(toString(properties.category), '')" +
   ")";
+
+const STORE_THEME_EXPR = "nullIf(toString(properties.theme_name), '')";
+
+/**
+ * Single vs multi — prefer explicit props, else infer from known theme names.
+ * (Collective/Meridian/Luminous are always multi; avoids gen landing in "unknown".)
+ */
+const STORE_KIND_EXPR =
+  "if(" +
+  "toString(properties.store_type) = 'multi' OR toString(properties.mode) = 'multi_product' OR " +
+  "toString(properties.theme_name) IN ('The Collective', 'Meridian', 'Luminous'), 'multi', " +
+  "if(" +
+  "toString(properties.store_type) = 'single' OR toString(properties.mode) = 'single_product' OR " +
+  "toString(properties.theme_name) IN ('Linen', 'Pulse', 'Eclipse', 'Velvet', 'Amour', 'QuickCart', 'Glow', 'Play'), 'single', " +
+  "'unknown'))";
+
+/**
+ * Market on the event, or person prop when generate (browser) omitted market_type
+ * but publish (server) / identify set it.
+ */
+function marketFilterLoose(market) {
+  const m = market === "cod" ? "cod" : "prepaid";
+  return {
+    type: "hogql",
+    key:
+      `(toString(properties.market_type) = '${m}' OR ` +
+      `(empty(nullIf(toString(properties.market_type), '')) AND ` +
+      `toString(person.properties.market_type) = '${m}'))`,
+  };
+}
+
+/**
+ * One shop (distinct_id) → one latest category + theme (+ store kind) per event.
+ * Uses distinct_id (myshopify domain) so browser generate + server publish match —
+ * person_id can split anon vs identified and fake "publish without generate" for new installs.
+ */
+async function fetchOutputUniqueByEvent(
+  market,
+  range,
+  { events, categoryExpr, themeExpr, cohortProps = [] },
+) {
+  const eventList = events.map((e) => `'${e}'`).join(", ");
+  const data = await posthogQuery({
+    kind: "HogQLQuery",
+    query: `
+SELECT
+  event,
+  distinct_id,
+  argMax(${categoryExpr}, timestamp) AS category_key,
+  argMax(${themeExpr}, timestamp) AS theme_key,
+  argMax(${STORE_KIND_EXPR}, timestamp) AS store_kind
+FROM events
+WHERE event IN (${eventList})
+  AND {filters}
+GROUP BY event, distinct_id
+`.trim(),
+    filters: {
+      filterTestAccounts: true,
+      dateRange: posthogDateRange(range),
+      properties: [marketFilterLoose(market), ...(cohortProps || [])],
+    },
+  });
+
+  const rows = Array.isArray(data?.results) ? data.results : [];
+  const byEvent = Object.fromEntries(events.map((e) => [e, []]));
+  for (const row of rows) {
+    const eventName = Array.isArray(row) ? row[0] : row?.event;
+    if (!byEvent[eventName]) continue;
+    const categoryKey = Array.isArray(row) ? row[2] : row?.category_key;
+    const themeKey = Array.isArray(row) ? row[3] : row?.theme_key;
+    const storeKind = Array.isArray(row) ? row[4] : row?.store_kind;
+    byEvent[eventName].push({
+      category: categoryKey == null ? "" : String(categoryKey),
+      theme: themeKey == null ? "" : String(themeKey),
+      store_kind: storeKind == null ? "unknown" : String(storeKind),
+    });
+  }
+  return byEvent;
+}
+
+function personFieldBreakdown(personRows, field, parseOpts) {
+  const fake = (personRows || []).map((r) => ({
+    breakdown_value: r[field] || "",
+    aggregated_value: 1,
+  }));
+  return parseBreakdown(fake, parseOpts);
+}
+
+function filterStoreKind(personRows, kind) {
+  return (personRows || []).filter((r) => r.store_kind === kind);
+}
+
+function mergeOutputPair(genRows, pubRows) {
+  return {
+    categories: mergeGeneratedPublished(
+      personFieldBreakdown(genRows, "category", { rename: categoryRename }),
+      personFieldBreakdown(pubRows, "category", { rename: categoryRename }),
+    ),
+    templates: mergeGeneratedPublished(
+      personFieldBreakdown(genRows, "theme", { rename: themeRename }),
+      personFieldBreakdown(pubRows, "theme", { rename: themeRename }),
+    ),
+    generated_users: (genRows || []).length,
+    published_users: (pubRows || []).length,
+  };
+}
 
 const CATEGORY_LABELS = {
   car_accessories: "Car Accessories",
@@ -1010,157 +1171,35 @@ async function fetchMarketStats(market, range, cohortProps = []) {
 }
 
 async function fetchMarketBreakdowns(market, range, cohortProps = []) {
-  const prefsStep = [stepProp("market_preferences_saved")];
-  const countryOpts = {
-    breakdown: COUNTRY_EXPR,
-    breakdownType: "hogql",
-    math: "total",
-    limit: 50,
-    cohortProps,
-  };
-  const langOpts = {
-    breakdown: LANGUAGE_EXPR,
-    breakdownType: "hogql",
-    math: "total",
-    limit: 50,
-    cohortProps,
-  };
+  // Prefs + PDP/store category/template: distinct persons (not event totals).
   const withCohort = { cohortProps };
 
   const [
-    countriesPrefs,
-    countriesPdpGen,
-    countriesPdpPub,
-    countriesStoreGen,
-    countriesStorePub,
-    languagesPrefs,
-    languagesPdpGen,
-    languagesPdpPub,
-    pdpThemesGen,
-    pdpThemesPub,
-    storeThemesGen,
-    storeThemesPub,
-    storeCategoriesGen,
-    storeCategoriesPub,
-    pdpCategoriesGen,
-    pdpCategoriesPub,
+    prefsAudience,
+    pdpOutput,
+    storeOutput,
     paidCountriesRaw,
     paidPacksRaw,
   ] = await Promise.all([
-    fetchTrendsBreakdown(market, range, {
-      event: "onboarding_step_completed",
-      name: "countries_prefs",
-      properties: prefsStep,
-      ...countryOpts,
+    fetchPrefsAudienceUnique(market, range, cohortProps),
+    fetchOutputUniqueByEvent(market, range, {
+      events: ["pdp_generated", "pdp_published"],
+      categoryExpr: CATEGORY_EXPR,
+      themeExpr: THEME_EXPR,
+      cohortProps,
     }),
-    fetchTrendsBreakdown(market, range, {
-      event: "pdp_generated",
-      name: "countries_pdp_gen",
-      ...countryOpts,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "pdp_published",
-      name: "countries_pdp_pub",
-      ...countryOpts,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "store_generated",
-      name: "countries_store_gen",
-      ...countryOpts,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "store_published",
-      name: "countries_store_pub",
-      ...countryOpts,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "onboarding_step_completed",
-      name: "languages_prefs",
-      properties: prefsStep,
-      ...langOpts,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "pdp_generated",
-      name: "languages_pdp_gen",
-      ...langOpts,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "pdp_published",
-      name: "languages_pdp_pub",
-      ...langOpts,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "pdp_generated",
-      name: "pdp_themes_gen",
-      breakdown: THEME_EXPR,
-      breakdownType: "hogql",
-      limit: 50,
-      ...withCohort,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "pdp_published",
-      name: "pdp_themes_pub",
-      breakdown: THEME_EXPR,
-      breakdownType: "hogql",
-      limit: 50,
-      ...withCohort,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "store_generated",
-      name: "store_themes_gen",
-      breakdown: "theme_name",
-      limit: 50,
-      ...withCohort,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "store_published",
-      name: "store_themes_pub",
-      breakdown: "theme_name",
-      limit: 50,
-      ...withCohort,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "store_generated",
-      name: "store_categories_gen",
-      breakdown: CATEGORY_EXPR,
-      breakdownType: "hogql",
-      math: "total",
-      limit: 50,
-      ...withCohort,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "store_published",
-      name: "store_categories_pub",
-      breakdown: CATEGORY_EXPR,
-      breakdownType: "hogql",
-      math: "total",
-      limit: 50,
-      ...withCohort,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "pdp_generated",
-      name: "pdp_categories_gen",
-      breakdown: CATEGORY_EXPR,
-      breakdownType: "hogql",
-      math: "total",
-      limit: 50,
-      ...withCohort,
-    }),
-    fetchTrendsBreakdown(market, range, {
-      event: "pdp_published",
-      name: "pdp_categories_pub",
-      breakdown: CATEGORY_EXPR,
-      breakdownType: "hogql",
-      math: "total",
-      limit: 50,
-      ...withCohort,
+    fetchOutputUniqueByEvent(market, range, {
+      events: ["store_generated", "store_published"],
+      categoryExpr: CATEGORY_EXPR,
+      themeExpr: STORE_THEME_EXPR,
+      cohortProps,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "credits_pack_purchased",
       name: "paid_countries",
       breakdown: PAID_COUNTRY_EXPR,
       breakdownType: "hogql",
-      math: "total",
+      math: "dau",
       limit: 50,
       ...withCohort,
     }).catch(async () =>
@@ -1168,7 +1207,11 @@ async function fetchMarketBreakdowns(market, range, cohortProps = []) {
       fetchTrendsBreakdown(market, range, {
         event: "credits_pack_purchased",
         name: "paid_countries_event",
-        ...countryOpts,
+        breakdown: COUNTRY_EXPR,
+        breakdownType: "hogql",
+        math: "dau",
+        limit: 50,
+        cohortProps,
       }),
     ),
     fetchTrendsBreakdown(market, range, {
@@ -1181,27 +1224,33 @@ async function fetchMarketBreakdowns(market, range, cohortProps = []) {
     }),
   ]);
 
-  const countries = unionBreakdownMax([
-    parseBreakdown(countriesPrefs, { country: true }),
-    parseBreakdown(countriesPdpGen, { country: true }),
-    parseBreakdown(countriesPdpPub, { country: true }),
-    parseBreakdown(countriesStoreGen, { country: true }),
-    parseBreakdown(countriesStorePub, { country: true }),
-  ]);
-  const languages = unionBreakdownMax([
-    parseBreakdown(languagesPrefs, { language: true }),
-    parseBreakdown(languagesPdpGen, { language: true }),
-    parseBreakdown(languagesPdpPub, { language: true }),
-  ]);
+  const pdpGen = pdpOutput.pdp_generated || [];
+  const pdpPub = pdpOutput.pdp_published || [];
+  const storeGen = storeOutput.store_generated || [];
+  const storePub = storeOutput.store_published || [];
+
+  const pdp = mergeOutputPair(pdpGen, pdpPub);
+  const storeSingle = mergeOutputPair(
+    filterStoreKind(storeGen, "single"),
+    filterStoreKind(storePub, "single"),
+  );
+  const storeMulti = mergeOutputPair(
+    filterStoreKind(storeGen, "multi"),
+    filterStoreKind(storePub, "multi"),
+  );
+  // Combined store (legacy UI keys) — unique people who generated any store.
+  const storeAll = mergeOutputPair(storeGen, storePub);
+
   const paidCountries = parseBreakdown(paidCountriesRaw, { country: true });
   const paidPacks = parseBreakdown(paidPacksRaw, { rename: packRename });
   const estimatedRevenue = estimateRevenueFromPacks(paidPacks.items);
 
   return {
-    countries: countries.items,
-    countries_missing: countries.missing,
-    languages: languages.items,
-    languages_missing: languages.missing,
+    prefs_unique_users: prefsAudience.unique_users,
+    countries: prefsAudience.countries,
+    countries_missing: prefsAudience.countries_missing,
+    languages: prefsAudience.languages,
+    languages_missing: prefsAudience.languages_missing,
     paid_countries: paidCountries.items,
     paid_countries_missing: paidCountries.missing,
     paid_packs: paidPacks.items.map((item) => {
@@ -1214,22 +1263,25 @@ async function fetchMarketBreakdowns(market, range, cohortProps = []) {
       };
     }),
     revenue_estimated: Math.round(estimatedRevenue * 100) / 100,
-    pdp_templates: mergeGeneratedPublished(
-      parseBreakdown(pdpThemesGen, { rename: themeRename }),
-      parseBreakdown(pdpThemesPub, { rename: themeRename }),
-    ),
-    store_templates: mergeGeneratedPublished(
-      parseBreakdown(storeThemesGen, { rename: themeRename }),
-      parseBreakdown(storeThemesPub, { rename: themeRename }),
-    ),
-    pdp_categories: mergeGeneratedPublished(
-      parseBreakdown(pdpCategoriesGen, { rename: categoryRename }),
-      parseBreakdown(pdpCategoriesPub, { rename: categoryRename }),
-    ),
-    store_categories: mergeGeneratedPublished(
-      parseBreakdown(storeCategoriesGen, { rename: categoryRename }),
-      parseBreakdown(storeCategoriesPub, { rename: categoryRename }),
-    ),
+    // Same unique people as Generated/Published totals — one category/template each.
+    output_uniques: {
+      pdp_generated: pdp.generated_users,
+      pdp_published: pdp.published_users,
+      store_generated_single: storeSingle.generated_users,
+      store_published_single: storeSingle.published_users,
+      store_generated_multi: storeMulti.generated_users,
+      store_published_multi: storeMulti.published_users,
+      store_generated: storeAll.generated_users,
+      store_published: storeAll.published_users,
+    },
+    pdp_templates: pdp.templates,
+    pdp_categories: pdp.categories,
+    store_templates: storeAll.templates,
+    store_categories: storeAll.categories,
+    store_templates_single: storeSingle.templates,
+    store_categories_single: storeSingle.categories,
+    store_templates_multi: storeMulti.templates,
+    store_categories_multi: storeMulti.categories,
   };
 }
 
@@ -1243,9 +1295,41 @@ async function loadMarket(market, range, cohortProps = []) {
   const revenueEstimated = Number(breakdowns?.revenue_estimated) || 0;
   const revenue = revenueTracked > 0 ? revenueTracked : revenueEstimated;
   const { funnels, ...statFields } = stats || {};
+  // Prefs + generate/publish totals must match category/template distinct persons.
+  const prefsUnique = Number(breakdowns?.prefs_unique_users);
+  const marketPrefs =
+    Number.isFinite(prefsUnique) && prefsUnique >= 0
+      ? prefsUnique
+      : Number(statFields.market_prefs) || 0;
+  const ou = breakdowns?.output_uniques || {};
+  const pickUnique = (key, fallback) => {
+    const n = Number(ou[key]);
+    return Number.isFinite(n) && n >= 0 ? n : Number(fallback) || 0;
+  };
   return {
     stats: {
       ...statFields,
+      market_prefs: marketPrefs,
+      pdp_generated: pickUnique("pdp_generated", statFields.pdp_generated),
+      pdp_published: pickUnique("pdp_published", statFields.pdp_published),
+      store_generated: pickUnique("store_generated", statFields.store_generated),
+      store_published: pickUnique("store_published", statFields.store_published),
+      store_generated_single: pickUnique(
+        "store_generated_single",
+        statFields.store_generated_single,
+      ),
+      store_published_single: pickUnique(
+        "store_published_single",
+        statFields.store_published_single,
+      ),
+      store_generated_multi: pickUnique(
+        "store_generated_multi",
+        statFields.store_generated_multi,
+      ),
+      store_published_multi: pickUnique(
+        "store_published_multi",
+        statFields.store_published_multi,
+      ),
       revenue: Math.round(revenue * 100) / 100,
       revenue_source: revenueTracked > 0 ? "price" : "catalog",
     },

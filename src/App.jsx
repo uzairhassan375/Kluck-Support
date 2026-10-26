@@ -38,44 +38,20 @@ function statsCohortFromPage(id) {
   return id === "stats-old" ? "old" : "new";
 }
 
-const KPI_GROUPS = [
-  {
-    title: "Onboarding (unique users)",
-    cards: [
-      { key: "market_prefs", label: "Saved market prefs" },
-      { key: "product_flow", label: "Continued → product" },
-      { key: "store_flow", label: "Continued → store" },
-    ],
-  },
-  {
-    title: "Product (PDP) users",
-    cards: [
-      { key: "pdp_generated", label: "Generated PDP" },
-      { key: "pdp_published", label: "Published PDP" },
-    ],
-  },
-  {
-    title: "Single product store users",
-    cards: [
-      { key: "store_generated_single", label: "Generated" },
-      { key: "store_published_single", label: "Published" },
-    ],
-  },
-  {
-    title: "Multi product store users",
-    cards: [
-      { key: "store_generated_multi", label: "Generated" },
-      { key: "store_published_multi", label: "Published" },
-    ],
-  },
-  {
-    title: "Revenue",
-    accent: true,
-    cards: [
-      { key: "checkout_started", label: "Checkout started" },
-      { key: "paid", label: "Paid users" },
-    ],
-  },
+const FLOW_CHOICE_CARDS = [
+  { key: "product_flow", label: "Product" },
+  { key: "store_flow", label: "Store" },
+];
+
+const REVENUE_KPI_CARDS = [
+  { key: "checkout_started", label: "Checkout started" },
+  { key: "paid", label: "Paid users" },
+];
+
+const OUTPUT_TABS = [
+  { id: "pdp", label: "PDP" },
+  { id: "single", label: "Single store" },
+  { id: "multi", label: "Multi store" },
 ];
 
 const LANG_FLAGS = {
@@ -241,12 +217,18 @@ function ShareList({ market, sectionKey, empty, items, missing, kind }) {
   );
 }
 
-function TemplateTable({ market, empty, items, nameHeader = "Template" }) {
+function TemplateTable({
+  market,
+  empty,
+  items,
+  nameHeader = "Template",
+  nested = false,
+}) {
   const rows = Array.isArray(items) ? items : [];
   const maxGen = Math.max(1, ...rows.map((r) => r.generated || 0));
 
   return (
-    <div className="compare-panel-body">
+    <div className={nested ? "template-table-nested" : "compare-panel-body"}>
       {rows.length === 0 ? (
         <p className="breakdown-empty">{empty}</p>
       ) : (
@@ -300,39 +282,75 @@ function TemplateTable({ market, empty, items, nameHeader = "Template" }) {
   );
 }
 
-function MarketHighlights({ market, data }) {
-  const stats = data?.stats || {};
+function OutputFlowBlock({
+  market,
+  generated,
+  published,
+  categories,
+  templates,
+  catEmpty,
+  tplEmpty,
+}) {
+  const gen = Number(generated) || 0;
+  const pub = Number(published) || 0;
+  const publishOnly = pub > 0 && gen === 0;
+
   return (
-    <div className="highlight-strip highlight-strip-5">
-      <div>
-        <span className="highlight-label">Paid</span>
-        <strong>{formatInt(stats.paid)}</strong>
+    <div className="output-flow-panel">
+      <div className="kpi-grid kpi-grid-2 output-flow-counts">
+        <div className="kpi-card kpi-card-green">
+          <span className="kpi-label">Generated</span>
+          <span className="kpi-value">{formatInt(generated)}</span>
+          <span className="kpi-sub">unique shops</span>
+        </div>
+        <div className="kpi-card">
+          <span className="kpi-label">Published</span>
+          <span className="kpi-value">{formatInt(published)}</span>
+          <span className="kpi-sub">
+            {publishOnly
+              ? "generate event missing"
+              : `${publishRate(generated, published)} publish rate`}
+          </span>
+        </div>
       </div>
-      <div>
-        <span className="highlight-label">Checkout</span>
-        <strong>{formatInt(stats.checkout_started)}</strong>
-      </div>
-      <div>
-        <span className="highlight-label">PDP publish</span>
-        <strong>{publishRate(stats.pdp_generated, stats.pdp_published)}</strong>
-      </div>
-      <div>
-        <span className="highlight-label">Single store publish</span>
-        <strong>
-          {publishRate(
-            stats.store_generated_single,
-            stats.store_published_single,
-          )}
-        </strong>
-      </div>
-      <div>
-        <span className="highlight-label">Multi store publish</span>
-        <strong>
-          {publishRate(
-            stats.store_generated_multi,
-            stats.store_published_multi,
-          )}
-        </strong>
+      <p className="stats-section-hint output-flow-hint">
+        {publishOnly
+          ? "Same-day new shops: publish is logged on the server, but store_generated didn’t arrive from the browser (or lacked market_type) — not a later-day publish."
+          : "Same shops in this range — niche they sell in vs design theme they picked."}
+      </p>
+      <div className="output-split-grid">
+        <div className="output-split-card output-split-category">
+          <div className="output-split-head">
+            <span className="output-split-eyebrow">Niche</span>
+            <h3 className="output-split-title">Categories</h3>
+            <p className="output-split-desc">
+              What they sell — Fashion, Kids Toys, Home & Kitchen…
+            </p>
+          </div>
+          <TemplateTable
+            market={`${market}-cat`}
+            empty={catEmpty}
+            items={categories}
+            nameHeader="Category"
+            nested
+          />
+        </div>
+        <div className="output-split-card output-split-template">
+          <div className="output-split-head">
+            <span className="output-split-eyebrow">Design</span>
+            <h3 className="output-split-title">Templates</h3>
+            <p className="output-split-desc">
+              Layout theme — Sleek, Vibe, Collective, Glow…
+            </p>
+          </div>
+          <TemplateTable
+            market={`${market}-tpl`}
+            empty={tplEmpty}
+            items={templates}
+            nameHeader="Template"
+            nested
+          />
+        </div>
       </div>
     </div>
   );
@@ -362,72 +380,6 @@ function RevenueAboveMarkets({ cod, prepaid, label }) {
         </div>
       </div>
     </section>
-  );
-}
-
-function WaterfallFunnel({ market, title, steps }) {
-  const rows = Array.isArray(steps) ? steps : [];
-  const max = Math.max(1, ...rows.map((s) => Number(s.count) || 0));
-  if (rows.length === 0) {
-    return <p className="breakdown-empty">No funnel data</p>;
-  }
-  return (
-    <div className="compare-panel-body">
-      {title ? <h3 className="kpi-group-title">{title}</h3> : null}
-      <ul className="funnel-list">
-        {rows.map((step, index) => {
-          const count = Number(step.count) || 0;
-          const prev = index > 0 ? Number(rows[index - 1].count) || 0 : null;
-          const conv =
-            prev && prev > 0
-              ? `${Math.round((1000 * count) / prev) / 10}% of prior`
-              : null;
-          return (
-            <li key={`${market}-${step.key || step.label}`}>
-              <div className="funnel-meta">
-                <span className="funnel-name">
-                  <span className="funnel-step">{index + 1}</span>
-                  {step.label}
-                </span>
-                <span className="funnel-count">{formatInt(count)}</span>
-              </div>
-              <div className="funnel-bar-track">
-                <div
-                  className="funnel-bar-fill"
-                  style={{
-                    width: `${Math.max(4, (100 * count) / max)}%`,
-                  }}
-                />
-              </div>
-              {conv ? <p className="funnel-conv">{conv}</p> : null}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-
-function MarketFunnels({ market, data }) {
-  const funnels = data?.funnels || {};
-  return (
-    <div className="compare-panel-body market-funnels">
-      <WaterfallFunnel
-        market={`${market}-product`}
-        title="Product (PDP)"
-        steps={funnels.product}
-      />
-      <WaterfallFunnel
-        market={`${market}-single`}
-        title="Single product store"
-        steps={funnels.store_single}
-      />
-      <WaterfallFunnel
-        market={`${market}-multi`}
-        title="Multi product store"
-        steps={funnels.store_multi}
-      />
-    </div>
   );
 }
 
@@ -465,38 +417,172 @@ function PaidPacksList({ market, items, empty }) {
   );
 }
 
-function MarketKpis({ market, data }) {
+function Step1MarketPrefs({ market, data }) {
   const stats = data?.stats || {};
   return (
     <div className="compare-panel-body">
-      {KPI_GROUPS.map((group) => (
-        <div key={`${market}-${group.title}`} className="kpi-group">
-          <h3 className="kpi-group-title">{group.title}</h3>
-          <div
-            className={group.accent ? "kpi-grid kpi-grid-revenue" : "kpi-grid"}
-          >
-            {group.cards.map((card) => (
-              <div
-                key={`${market}-${card.key}`}
-                className={group.accent ? "kpi-card kpi-card-accent" : "kpi-card"}
-              >
-                <span className="kpi-label">{card.label}</span>
-                <span className="kpi-value">{formatInt(stats[card.key])}</span>
-              </div>
-            ))}
+      <p className="kpi-step-badge">Step 1</p>
+      <div className="kpi-group">
+        <h3 className="kpi-group-title">Saved market prefs</h3>
+        <div className="kpi-grid">
+          <div className="kpi-card kpi-card-green">
+            <span className="kpi-label">Users who saved prefs</span>
+            <span className="kpi-value">{formatInt(stats.market_prefs)}</span>
           </div>
         </div>
-      ))}
+      </div>
+
+      <div className="kpi-group">
+        <h3 className="kpi-group-title">Target audience</h3>
+        <p className="stats-section-hint">
+          Same people as the green count — one country each
+        </p>
+        <ShareList
+          market={market}
+          sectionKey="countries"
+          empty="No country data"
+          items={data?.countries}
+          missing={data?.countries_missing}
+          kind="country"
+        />
+      </div>
+
+      <div className="kpi-group">
+        <h3 className="kpi-group-title">Store language</h3>
+        <p className="stats-section-hint">
+          Same people as the green count — one language each
+        </p>
+        <ShareList
+          market={market}
+          sectionKey="languages"
+          empty="No language data"
+          items={data?.languages}
+          missing={data?.languages_missing}
+          kind="language"
+        />
+      </div>
     </div>
   );
 }
 
-function CompareRow({ title, hint, cod, prepaid }) {
+function Step2ChoseFlow({ market, data }) {
+  const stats = data?.stats || {};
+  return (
+    <div className="compare-panel-body">
+      <p className="kpi-step-badge">Step 2</p>
+      <div className="kpi-group">
+        <h3 className="kpi-group-title">Chose flow</h3>
+        <p className="stats-section-hint">
+          Unique users who continued to Product or Store
+        </p>
+        <div className="kpi-grid">
+          {FLOW_CHOICE_CARDS.map((card) => (
+            <div key={`${market}-${card.key}`} className="kpi-card">
+              <span className="kpi-label">{card.label}</span>
+              <span className="kpi-value">{formatInt(stats[card.key])}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Step3GeneratePublish({ market, data, outputTab = "pdp" }) {
+  const stats = data?.stats || {};
+  const tab = OUTPUT_TABS.some((t) => t.id === outputTab) ? outputTab : "pdp";
+
+  let flow = null;
+  if (tab === "single") {
+    flow = (
+      <OutputFlowBlock
+        market={`${market}-single`}
+        generated={stats.store_generated_single}
+        published={stats.store_published_single}
+        categories={data?.store_categories_single}
+        templates={data?.store_templates_single}
+        catEmpty="No single-store categories"
+        tplEmpty="No single-store templates"
+      />
+    );
+  } else if (tab === "multi") {
+    flow = (
+      <OutputFlowBlock
+        market={`${market}-multi`}
+        generated={stats.store_generated_multi}
+        published={stats.store_published_multi}
+        categories={data?.store_categories_multi}
+        templates={data?.store_templates_multi}
+        catEmpty="No multi-store categories"
+        tplEmpty="No multi-store templates"
+      />
+    );
+  } else {
+    flow = (
+      <OutputFlowBlock
+        market={`${market}-pdp`}
+        generated={stats.pdp_generated}
+        published={stats.pdp_published}
+        categories={data?.pdp_categories}
+        templates={data?.pdp_templates}
+        catEmpty="No PDP categories"
+        tplEmpty="No PDP templates"
+      />
+    );
+  }
+
+  return (
+    <div className="compare-panel-body">
+      <p className="kpi-step-badge">Step 3</p>
+      {flow}
+    </div>
+  );
+}
+
+function MarketRevenueKpis({ market, data }) {
+  const stats = data?.stats || {};
+  return (
+    <div className="compare-panel-body">
+      <div className="kpi-grid kpi-grid-revenue">
+        {REVENUE_KPI_CARDS.map((card) => (
+          <div
+            key={`${market}-${card.key}`}
+            className="kpi-card kpi-card-accent"
+          >
+            <span className="kpi-label">{card.label}</span>
+            <span className="kpi-value">{formatInt(stats[card.key])}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CompareRow({ title, hint, cod, prepaid, tabs, activeTab, onTabChange }) {
   return (
     <section className="compare-row">
       <div className="compare-row-head">
         <h3>{title}</h3>
         {hint ? <p className="stats-section-hint">{hint}</p> : null}
+        {Array.isArray(tabs) && tabs.length > 0 ? (
+          <div className="step-tabs" role="tablist" aria-label={title}>
+            {tabs.map((tab) => {
+              const selected = tab.id === activeTab;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  className={selected ? "step-tab active" : "step-tab"}
+                  onClick={() => onTabChange?.(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
       <div className="compare-row-grid">
         <div className="compare-panel compare-panel-cod">{cod}</div>
@@ -548,6 +634,8 @@ function InstallsStrip({ data, label, cohort }) {
 }
 
 function MarketsCompare({ cod, prepaid, installs, label, cohort }) {
+  const [outputTab, setOutputTab] = useState("pdp");
+
   return (
     <div className="markets-compare">
       <InstallsStrip data={installs} label={label} cohort={cohort} />
@@ -590,24 +678,46 @@ function MarketsCompare({ cod, prepaid, installs, label, cohort }) {
       </div>
 
       <CompareRow
-        title="At a glance"
-        hint="Paid, checkout, and publish rates for this date range"
-        cod={<MarketHighlights market="cod" data={cod} />}
-        prepaid={<MarketHighlights market="prepaid" data={prepaid} />}
+        title="Step 1 · Market prefs"
+        hint="Saved prefs, target audience, and store language"
+        cod={<Step1MarketPrefs market="cod" data={cod} />}
+        prepaid={<Step1MarketPrefs market="prepaid" data={prepaid} />}
       />
 
       <CompareRow
-        title="KPIs"
-        hint="Unique users per step (not click counts). Product + store can both be under prefs if people retry."
-        cod={<MarketKpis market="cod" data={cod} />}
-        prepaid={<MarketKpis market="prepaid" data={prepaid} />}
+        title="Step 2 · Chose flow"
+        hint="Product vs Store — unique users who continued after prefs"
+        cod={<Step2ChoseFlow market="cod" data={cod} />}
+        prepaid={<Step2ChoseFlow market="prepaid" data={prepaid} />}
       />
 
       <CompareRow
-        title="Flow waterfalls"
-        hint="Unique users at each step — product vs single store vs multi store"
-        cod={<MarketFunnels market="cod" data={cod} />}
-        prepaid={<MarketFunnels market="prepaid" data={prepaid} />}
+        title="Step 3 · Generate & publish"
+        hint="Unique users who generated — then the category & template each one used"
+        tabs={OUTPUT_TABS}
+        activeTab={outputTab}
+        onTabChange={setOutputTab}
+        cod={
+          <Step3GeneratePublish
+            market="cod"
+            data={cod}
+            outputTab={outputTab}
+          />
+        }
+        prepaid={
+          <Step3GeneratePublish
+            market="prepaid"
+            data={prepaid}
+            outputTab={outputTab}
+          />
+        }
+      />
+
+      <CompareRow
+        title="Checkout & paid"
+        hint="Unique users who started checkout or paid in this range"
+        cod={<MarketRevenueKpis market="cod" data={cod} />}
+        prepaid={<MarketRevenueKpis market="prepaid" data={prepaid} />}
       />
 
       <CompareRow
@@ -625,31 +735,6 @@ function MarketsCompare({ cod, prepaid, installs, label, cohort }) {
             market="prepaid"
             empty="No pack purchases"
             items={prepaid?.paid_packs}
-          />
-        }
-      />
-
-      <CompareRow
-        title="Target audience"
-        hint="Countries from prefs, generated, and published"
-        cod={
-          <ShareList
-            market="cod"
-            sectionKey="countries"
-            empty="No country data"
-            items={cod?.countries}
-            missing={cod?.countries_missing}
-            kind="country"
-          />
-        }
-        prepaid={
-          <ShareList
-            market="prepaid"
-            sectionKey="countries"
-            empty="No country data"
-            items={prepaid?.countries}
-            missing={prepaid?.countries_missing}
-            kind="country"
           />
         }
       />
@@ -675,111 +760,6 @@ function MarketsCompare({ cod, prepaid, installs, label, cohort }) {
             items={prepaid?.paid_countries}
             missing={prepaid?.paid_countries_missing}
             kind="country"
-          />
-        }
-      />
-
-      <CompareRow
-        title="Store language"
-        hint="Language chosen for the storefront"
-        cod={
-          <ShareList
-            market="cod"
-            sectionKey="languages"
-            empty="No language data"
-            items={cod?.languages}
-            missing={cod?.languages_missing}
-            kind="language"
-          />
-        }
-        prepaid={
-          <ShareList
-            market="prepaid"
-            sectionKey="languages"
-            empty="No language data"
-            items={prepaid?.languages}
-            missing={prepaid?.languages_missing}
-            kind="language"
-          />
-        }
-      />
-
-      <CompareRow
-        title="PDP categories"
-        hint="Health & Beauty, Fashion, Kids Toys, etc. — generated vs published"
-        cod={
-          <TemplateTable
-            market="cod"
-            empty="No PDP categories"
-            items={cod?.pdp_categories}
-            nameHeader="Category"
-          />
-        }
-        prepaid={
-          <TemplateTable
-            market="prepaid"
-            empty="No PDP categories"
-            items={prepaid?.pdp_categories}
-            nameHeader="Category"
-          />
-        }
-      />
-
-      <CompareRow
-        title="Store categories"
-        hint="Same category list as PDP — which niches stores are built in"
-        cod={
-          <TemplateTable
-            market="cod"
-            empty="No store categories"
-            items={cod?.store_categories}
-            nameHeader="Category"
-          />
-        }
-        prepaid={
-          <TemplateTable
-            market="prepaid"
-            empty="No store categories"
-            items={prepaid?.store_categories}
-            nameHeader="Category"
-          />
-        }
-      />
-
-      <CompareRow
-        title="PDP templates"
-        hint="Counts are for this date range only — publish can be on a different day than generate"
-        cod={
-          <TemplateTable
-            market="cod"
-            empty="No PDP templates"
-            items={cod?.pdp_templates}
-          />
-        }
-        prepaid={
-          <TemplateTable
-            market="prepaid"
-            empty="No PDP templates"
-            items={prepaid?.pdp_templates}
-          />
-        }
-      />
-
-      <CompareRow
-        title="Store templates"
-        hint="Counts are for this date range only — publish can be on a different day than generate"
-        cod={
-          <TemplateTable
-            market="cod"
-            empty="No store templates"
-            items={cod?.store_templates}
-          />
-        }
-        prepaid={
-          <TemplateTable
-            market="prepaid"
-            empty="No store templates"
-            items={prepaid?.store_templates}
           />
         }
       />
@@ -1398,9 +1378,7 @@ export default function App() {
               {statsError ? <p className="error">{statsError}</p> : null}
               {!statsLoaded ? (
                 <p className="empty">
-                  {statsBusy
-                    ? "Loading PostHog… paced to avoid rate limits (can take up to a minute)."
-                    : "Loading…"}
+                  {statsBusy ? "Loading PostHog…" : "Loading…"}
                 </p>
               ) : (
                 <MarketsCompare
