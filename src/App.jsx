@@ -372,9 +372,52 @@ function CompareRow({ title, hint, cod, prepaid }) {
   );
 }
 
-function MarketsCompare({ cod, prepaid }) {
+function InstallsStrip({ data, label }) {
+  const installs = data?.installs;
+  const uninstalls = data?.uninstalls;
+  const net = data?.net;
+  const netValue = Number(net);
+  const netClass =
+    Number.isFinite(netValue) && netValue < 0
+      ? "installs-net negative"
+      : Number.isFinite(netValue) && netValue > 0
+        ? "installs-net positive"
+        : "installs-net";
+  return (
+    <section className="installs-strip" aria-label="Installs and uninstalls">
+      <div className="installs-strip-head">
+        <h3>App installs</h3>
+        <p className="stats-section-hint">
+          Combined across markets
+          {label ? ` · ${label}` : ""}
+        </p>
+      </div>
+      <div className="highlight-strip highlight-strip-installs">
+        <div>
+          <span className="highlight-label">Installs</span>
+          <strong>{formatInt(installs)}</strong>
+        </div>
+        <div>
+          <span className="highlight-label">Uninstalls</span>
+          <strong>{formatInt(uninstalls)}</strong>
+        </div>
+        <div>
+          <span className="highlight-label">Net</span>
+          <strong className={netClass}>
+            {Number.isFinite(netValue) && netValue > 0 ? "+" : ""}
+            {formatInt(net)}
+          </strong>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MarketsCompare({ cod, prepaid, installs, label }) {
   return (
     <div className="markets-compare">
+      <InstallsStrip data={installs} label={label} />
+
       <div className="compare-markets-head">
         <div className="market-head-card market-col-cod">
           <p className="market-eyebrow">Cash on delivery</p>
@@ -1203,6 +1246,8 @@ export default function App() {
                 <MarketsCompare
                   cod={statsData?.cod}
                   prepaid={statsData?.prepaid}
+                  installs={statsData?.installs}
+                  label={statsData?.label}
                 />
               )}
             </div>
