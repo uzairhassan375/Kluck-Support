@@ -305,12 +305,12 @@ function MarketHighlights({ market, data }) {
   return (
     <div className="highlight-strip highlight-strip-5">
       <div>
-        <span className="highlight-label">Revenue</span>
-        <strong>{formatMoney(stats.revenue)}</strong>
-      </div>
-      <div>
         <span className="highlight-label">Paid</span>
         <strong>{formatInt(stats.paid)}</strong>
+      </div>
+      <div>
+        <span className="highlight-label">Checkout</span>
+        <strong>{formatInt(stats.checkout_started)}</strong>
       </div>
       <div>
         <span className="highlight-label">PDP publish</span>
@@ -335,6 +335,33 @@ function MarketHighlights({ market, data }) {
         </strong>
       </div>
     </div>
+  );
+}
+
+function RevenueAboveMarkets({ cod, prepaid, label }) {
+  const codRev = Number(cod?.stats?.revenue) || 0;
+  const prepaidRev = Number(prepaid?.stats?.revenue) || 0;
+  const total = codRev + prepaidRev;
+  return (
+    <section className="revenue-above" aria-label="Revenue by market">
+      <div className="revenue-above-head">
+        <h3>Revenue</h3>
+        <p className="stats-section-hint">
+          Combined {formatMoney(total)}
+          {label ? ` · ${label}` : ""}
+        </p>
+      </div>
+      <div className="revenue-above-grid">
+        <div className="revenue-above-card market-col-cod">
+          <span className="highlight-label">COD</span>
+          <strong>{formatMoney(codRev)}</strong>
+        </div>
+        <div className="revenue-above-card market-col-prepaid">
+          <span className="highlight-label">Prepaid</span>
+          <strong>{formatMoney(prepaidRev)}</strong>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -490,6 +517,7 @@ function InstallsStrip({ data, label, cohort }) {
       : Number.isFinite(netValue) && netValue > 0
         ? "installs-net positive"
         : "installs-net";
+  const netText = `${Number.isFinite(netValue) && netValue > 0 ? "+" : ""}${formatInt(net)}`;
   return (
     <section className="installs-strip" aria-label="Installs and uninstalls">
       <div className="installs-strip-head">
@@ -501,21 +529,18 @@ function InstallsStrip({ data, label, cohort }) {
           {label ? ` · ${label}` : ""}
         </p>
       </div>
-      <div className="highlight-strip highlight-strip-installs">
-        <div>
+      <div className="installs-metrics-row">
+        <div className="installs-metric">
           <span className="highlight-label">Installs</span>
           <strong>{formatInt(installs)}</strong>
         </div>
-        <div>
+        <div className="installs-metric">
           <span className="highlight-label">Uninstalls</span>
           <strong>{formatInt(uninstalls)}</strong>
         </div>
-        <div>
+        <div className="installs-metric installs-metric-net">
           <span className="highlight-label">Net</span>
-          <strong className={netClass}>
-            {Number.isFinite(netValue) && netValue > 0 ? "+" : ""}
-            {formatInt(net)}
-          </strong>
+          <strong className={netClass}>{netText}</strong>
         </div>
       </div>
     </section>
@@ -526,6 +551,8 @@ function MarketsCompare({ cod, prepaid, installs, label, cohort }) {
   return (
     <div className="markets-compare">
       <InstallsStrip data={installs} label={label} cohort={cohort} />
+
+      <RevenueAboveMarkets cod={cod} prepaid={prepaid} label={label} />
 
       <div className="compare-markets-head">
         <div className="market-head-card market-col-cod">
@@ -564,7 +591,7 @@ function MarketsCompare({ cod, prepaid, installs, label, cohort }) {
 
       <CompareRow
         title="At a glance"
-        hint="Revenue for this date range, paid, checkout, publish rates"
+        hint="Paid, checkout, and publish rates for this date range"
         cod={<MarketHighlights market="cod" data={cod} />}
         prepaid={<MarketHighlights market="prepaid" data={prepaid} />}
       />
@@ -911,8 +938,14 @@ export default function App() {
       // (or PASSWORD) is missing/mismatched on Vercel — not that the user logged out.
       const message =
         err.message === "Login required"
-          ? "Stats auth failed. On Vercel set SUPPORT_ADMIN_TOKEN_SECRET (or SUPPORT_ADMIN_PASSWORD) to the same value as the Kluck API."
-          : err.message;
+          ? "Stats auth failed. On localhost set SUPPORT_ADMIN_TOKEN_SECRET in .env to the same value that signs your login token (must match api.kluck.ai)."
+          : /throttl|rate.?limit|too many requests/i.test(err.message || "")
+            ? "PostHog is rate-limiting right now. Wait ~30s and hit Refresh — Support paces queries automatically."
+            : /Unexpected token|is not valid JSON|Failed to fetch/i.test(
+                  err.message || "",
+                )
+              ? "Stats API is not running. Restart npm run dev (Vite now serves /api/posthog-market-stats locally)."
+              : err.message;
       setStatsError(message);
       setStatsLoaded(true);
     } finally {
@@ -1364,7 +1397,11 @@ export default function App() {
             <div className={`stats-page${statsBusy && statsLoaded ? " stats-page-refreshing" : ""}`}>
               {statsError ? <p className="error">{statsError}</p> : null}
               {!statsLoaded ? (
-                <p className="empty">{statsBusy ? "Loading PostHog…" : "Loading…"}</p>
+                <p className="empty">
+                  {statsBusy
+                    ? "Loading PostHog… paced to avoid rate limits (can take up to a minute)."
+                    : "Loading…"}
+                </p>
               ) : (
                 <MarketsCompare
                   cod={statsData?.cod}

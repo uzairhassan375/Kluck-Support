@@ -1,8 +1,14 @@
 /**
  * Vercel serverless: COD + prepaid PostHog KPIs and funnel.
  * Secrets stay server-side (never VITE_*). Auth = same HMAC token as support login.
+ *
+ * PostHog queries are paced (≤2 concurrent) with 429 retry — keep maxDuration high.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
+
+export const config = {
+  maxDuration: 60,
+};
 
 /** Relative presets PostHog understands (calendar / rolling). */
 const RELATIVE_FROM = new Set([
@@ -129,6 +135,84 @@ function supportAuthorized(req) {
   }
 }
 
+/**
+ * PostHog query API limits (project-level): 3 concurrent, 240/min, 2400/hour.
+ * Pace all Support stats queries through one queue + retry on 429.
+ */
+const POSTHOG_MAX_CONCURRENT = Math.max(
+  1,
+  Number(process.env.POSTHOG_MAX_CONCURRENT || 2),
+);
+const POSTHOG_MIN_GAP_MS = Math.max(
+  0,
+  Number(process.env.POSTHOG_MIN_GAP_MS || 350),
+);
+const POSTHOG_MAX_RETRIES = Math.max(
+  0,
+  Number(process.env.POSTHOG_MAX_RETRIES || 6),
+);
+
+let posthogActive = 0;
+let posthogLastStartMs = 0;
+const posthogWaiters = [];
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function acquirePosthogSlot() {
+  return new Promise((resolve) => {
+    const tryAcquire = () => {
+      if (posthogActive >= POSTHOG_MAX_CONCURRENT) {
+        posthogWaiters.push(tryAcquire);
+        return;
+      }
+      posthogActive += 1;
+      const gap = Math.max(0, POSTHOG_MIN_GAP_MS - (Date.now() - posthogLastStartMs));
+      if (gap > 0) {
+        sleep(gap).then(() => {
+          posthogLastStartMs = Date.now();
+          resolve();
+        });
+      } else {
+        posthogLastStartMs = Date.now();
+        resolve();
+      }
+    };
+    tryAcquire();
+  });
+}
+
+function releasePosthogSlot() {
+  posthogActive = Math.max(0, posthogActive - 1);
+  const next = posthogWaiters.shift();
+  if (next) next();
+}
+
+function parseThrottleWaitMs(message, response) {
+  const header = response?.headers?.get?.("retry-after");
+  if (header) {
+    const asNum = Number(header);
+    if (Number.isFinite(asNum) && asNum >= 0) {
+      return Math.ceil(asNum * 1000) + 250;
+    }
+    const when = Date.parse(header);
+    if (Number.isFinite(when)) {
+      return Math.max(250, when - Date.now() + 250);
+    }
+  }
+  const text = String(message || "");
+  const m = text.match(/available in\s+(\d+)\s*seconds?/i);
+  if (m) return (Number(m[1]) + 1) * 1000;
+  return 5000;
+}
+
+function isThrottleError(status, data) {
+  if (status === 429) return true;
+  const text = String(data?.detail || data?.error || data?.message || "");
+  return /throttl|rate.?limit|too many requests/i.test(text);
+}
+
 async function posthogQuery(query) {
   const apiKey = process.env.POSTHOG_PERSONAL_API_KEY;
   const projectId = process.env.POSTHOG_PROJECT_ID || "296750";
@@ -142,24 +226,55 @@ async function posthogQuery(query) {
     throw err;
   }
 
-  const response = await fetch(`${host}/api/projects/${projectId}/query/`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query }),
-  });
+  let lastError;
+  for (let attempt = 0; attempt <= POSTHOG_MAX_RETRIES; attempt++) {
+    await acquirePosthogSlot();
+    try {
+      const response = await fetch(`${host}/api/projects/${projectId}/query/`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query }),
+      });
 
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message =
-      data?.detail || data?.error || data?.message || `PostHog HTTP ${response.status}`;
-    const err = new Error(String(message));
-    err.status = response.status >= 400 && response.status < 600 ? response.status : 502;
-    throw err;
+      const data = await response.json().catch(() => ({}));
+      if (isThrottleError(response.status, data)) {
+        const message =
+          data?.detail ||
+          data?.error ||
+          data?.message ||
+          `PostHog throttled (${response.status})`;
+        lastError = new Error(String(message));
+        lastError.status = 429;
+        if (attempt >= POSTHOG_MAX_RETRIES) break;
+        const waitMs = parseThrottleWaitMs(message, response);
+        await sleep(waitMs);
+        continue;
+      }
+
+      if (!response.ok) {
+        const message =
+          data?.detail ||
+          data?.error ||
+          data?.message ||
+          `PostHog HTTP ${response.status}`;
+        const err = new Error(String(message));
+        err.status =
+          response.status >= 400 && response.status < 600 ? response.status : 502;
+        throw err;
+      }
+      return data;
+    } finally {
+      releasePosthogSlot();
+    }
   }
-  return data;
+
+  throw (
+    lastError ||
+    Object.assign(new Error("PostHog request was throttled"), { status: 429 })
+  );
 }
 
 function marketFilter(market) {
