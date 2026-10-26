@@ -653,81 +653,13 @@ async function fetchMarketBreakdowns(market, range) {
   };
 }
 
-async function fetchMarketFunnel(market, range) {
-  const funnel = await posthogQuery({
-    kind: "FunnelsQuery",
-    series: [
-      {
-        kind: "EventsNode",
-        event: "onboarding_step_completed",
-        name: "Market prefs",
-        properties: [stepProp("market_preferences_saved")],
-      },
-      {
-        kind: "EventsNode",
-        event: "onboarding_step_completed",
-        name: "Flow chosen",
-        properties: [
-          stepProp(["product_flow_selected", "store_flow_selected"]),
-        ],
-      },
-      {
-        kind: "EventsNode",
-        event: "onboarding_step_completed",
-        name: "Content generated",
-        properties: [stepProp("content_generated")],
-      },
-      {
-        kind: "EventsNode",
-        event: "pdp_published",
-        name: "PDP published",
-      },
-    ],
-    dateRange: posthogDateRange(range),
-    filterTestAccounts: true,
-    properties: [marketFilter(market)],
-    funnelsFilter: {
-      funnelOrderType: "ordered",
-      funnelVizType: "steps",
-      funnelWindowInterval: 14,
-      funnelWindowIntervalUnit: "day",
-    },
-  });
-
-  const labels = [
-    "Market prefs",
-    "Flow chosen",
-    "Content generated",
-    "PDP published",
-  ];
-  const raw = funnel?.results;
-  let stepRows = [];
-  if (Array.isArray(raw)) {
-    if (Array.isArray(raw[0])) {
-      stepRows = raw[0];
-    } else if (raw[0] && typeof raw[0] === "object" && "count" in raw[0]) {
-      stepRows = raw;
-    }
-  }
-
-  return labels.map((name, i) => {
-    const step = stepRows[i];
-    return {
-      name: step?.name || step?.custom_name || name,
-      count: Math.round(Number(step?.count) || 0),
-    };
-  });
-}
-
 async function loadMarket(market, range) {
-  const [stats, funnel, breakdowns] = await Promise.all([
+  const [stats, breakdowns] = await Promise.all([
     fetchMarketStats(market, range),
-    fetchMarketFunnel(market, range),
     fetchMarketBreakdowns(market, range),
   ]);
   return {
     stats,
-    funnel,
     ...breakdowns,
     dashboard_url: DASHBOARDS[market],
   };
