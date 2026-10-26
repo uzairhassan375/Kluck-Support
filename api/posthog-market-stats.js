@@ -171,12 +171,115 @@ function marketFilter(market) {
   };
 }
 
+function utcTodayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function utcDaysAgoIso(days) {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Absolute calendar bounds (UTC) for cohorting on person.properties.first_seen_at.
+ * Event dateRange still uses PostHog relative tokens (dStart / -7d / …).
+ */
+function absoluteCohortBounds(range) {
+  const today = utcTodayIso();
+  if (range.date_from === "dStart") {
+    return { from: today, to: today };
+  }
+  if (range.date_from === "-1dStart") {
+    const y = utcDaysAgoIso(1);
+    return { from: y, to: y };
+  }
+  if (range.date_from === "-7d") {
+    return { from: utcDaysAgoIso(6), to: today };
+  }
+  if (range.date_from === "-30d") {
+    return { from: utcDaysAgoIso(29), to: today };
+  }
+  if (range.date_from === "-90d") {
+    return { from: utcDaysAgoIso(89), to: today };
+  }
+  if (isIsoDate(range.date_from)) {
+    return {
+      from: range.date_from,
+      to: isIsoDate(range.date_to) ? range.date_to : range.date_from,
+    };
+  }
+  return { from: utcDaysAgoIso(29), to: today };
+}
+
+/**
+ * new = first_seen_at inside the selected range (installed in period)
+ * old = first_seen_at before the range start (returning / earlier installs)
+ */
+function cohortFilters(cohort, bounds) {
+  if (!cohort || cohort === "all" || !bounds?.from) return [];
+  const from = bounds.from;
+  const to = bounds.to || bounds.from;
+  const seen = "toDate(toTimeZone(toDateTime(person.properties.first_seen_at), 'UTC'))";
+  if (cohort === "new") {
+    return [
+      {
+        type: "hogql",
+        key:
+          `person.properties.first_seen_at IS NOT NULL AND ` +
+          `${seen} >= toDate('${from}') AND ${seen} <= toDate('${to}')`,
+      },
+    ];
+  }
+  if (cohort === "old") {
+    return [
+      {
+        type: "hogql",
+        key:
+          `person.properties.first_seen_at IS NOT NULL AND ` +
+          `${seen} < toDate('${from}')`,
+      },
+    ];
+  }
+  return [];
+}
+
+function resolveCohort(url) {
+  const raw = (url.searchParams.get("cohort") || "new").trim().toLowerCase();
+  if (raw === "old" || raw === "returning") return "old";
+  if (raw === "all") return "all";
+  return "new";
+}
+
 function stepProp(names) {
   return {
     key: "step_name",
     operator: "exact",
     type: "event",
     value: Array.isArray(names) ? names : [names],
+  };
+}
+
+/** single | multi — matches store_type and legacy mode on generate/publish. */
+function storeTypeProp(type) {
+  if (type === "multi") {
+    return {
+      type: "hogql",
+      key: "(toString(properties.store_type) = 'multi' OR toString(properties.mode) = 'multi_product')",
+    };
+  }
+  return {
+    type: "hogql",
+    key: "(toString(properties.store_type) = 'single' OR toString(properties.mode) = 'single_product')",
+  };
+}
+
+function storeTypeExact(type) {
+  return {
+    key: "store_type",
+    operator: "exact",
+    type: "event",
+    value: [type],
   };
 }
 
@@ -505,6 +608,7 @@ async function fetchTrendsBreakdown(market, range, {
   breakdownType = "event",
   math = "total",
   limit = 50,
+  cohortProps = [],
 }) {
   const trends = await posthogQuery({
     kind: "TrendsQuery",
@@ -520,7 +624,7 @@ async function fetchTrendsBreakdown(market, range, {
     dateRange: posthogDateRange(range),
     interval: "day",
     filterTestAccounts: true,
-    properties: [marketFilter(market)],
+    properties: [marketFilter(market), ...cohortProps],
     breakdownFilter: {
       breakdown,
       breakdown_type: breakdownType,
@@ -534,7 +638,7 @@ async function fetchTrendsBreakdown(market, range, {
 /**
  * App-wide installs / uninstalls (not market-split — events have no market_type).
  */
-async function fetchInstallStats(range) {
+async function fetchInstallStats(range, cohortProps = []) {
   const trends = await posthogQuery({
     kind: "TrendsQuery",
     series: [
@@ -554,12 +658,13 @@ async function fetchInstallStats(range) {
     dateRange: posthogDateRange(range),
     interval: "day",
     filterTestAccounts: true,
+    properties: cohortProps.length ? cohortProps : undefined,
     trendsFilter: { display: "BoldNumber" },
   });
 
   const rows = Array.isArray(trends?.results) ? trends.results : [];
   const byName = Object.fromEntries(
-    rows.map((row) => [row?.action?.name || row?.label || "", seriesTotal(row)]),
+    rows.map((row) => [seriesKey(row), seriesTotal(row)]),
   );
   const installs = byName.installs ?? seriesTotal(rows[0]);
   const uninstalls = byName.uninstalls ?? seriesTotal(rows[1]);
@@ -570,8 +675,32 @@ async function fetchInstallStats(range) {
   };
 }
 
-async function fetchMarketStats(market, range) {
-  const props = [marketFilter(market)];
+function seriesKey(row) {
+  return (
+    row?.action?.custom_name ||
+    row?.action?.name ||
+    row?.label ||
+    ""
+  );
+}
+
+function trendsByName(trends) {
+  const rows = Array.isArray(trends?.results) ? trends.results : [];
+  return Object.fromEntries(
+    rows.map((row) => [seriesKey(row), seriesTotal(row)]),
+  );
+}
+
+function funnelSteps(byName, defs) {
+  return defs.map((def) => ({
+    key: def.key,
+    label: def.label,
+    count: Number(byName[def.key]) || 0,
+  }));
+}
+
+async function fetchMarketStats(market, range, cohortProps = []) {
+  const props = [marketFilter(market), ...cohortProps];
   const trends = await posthogQuery({
     kind: "TrendsQuery",
     series: [
@@ -598,6 +727,13 @@ async function fetchMarketStats(market, range) {
       },
       {
         kind: "EventsNode",
+        event: "onboarding_step_completed",
+        name: "product_configured",
+        math: "total",
+        properties: [stepProp("product_configured")],
+      },
+      {
+        kind: "EventsNode",
         event: "pdp_generated",
         name: "pdp_generated",
         math: "total",
@@ -610,15 +746,57 @@ async function fetchMarketStats(market, range) {
       },
       {
         kind: "EventsNode",
+        event: "onboarding_step_completed",
+        name: "store_configured_single",
+        math: "total",
+        properties: [stepProp("store_configured"), storeTypeExact("single")],
+      },
+      {
+        kind: "EventsNode",
+        event: "onboarding_step_completed",
+        name: "store_configured_multi",
+        math: "total",
+        properties: [stepProp("store_configured"), storeTypeExact("multi")],
+      },
+      {
+        kind: "EventsNode",
         event: "store_generated",
         name: "store_generated",
         math: "total",
       },
       {
         kind: "EventsNode",
+        event: "store_generated",
+        name: "store_generated_single",
+        math: "total",
+        properties: [storeTypeProp("single")],
+      },
+      {
+        kind: "EventsNode",
+        event: "store_generated",
+        name: "store_generated_multi",
+        math: "total",
+        properties: [storeTypeProp("multi")],
+      },
+      {
+        kind: "EventsNode",
         event: "store_published",
         name: "store_published",
         math: "total",
+      },
+      {
+        kind: "EventsNode",
+        event: "store_published",
+        name: "store_published_single",
+        math: "total",
+        properties: [storeTypeProp("single")],
+      },
+      {
+        kind: "EventsNode",
+        event: "store_published",
+        name: "store_published_multi",
+        math: "total",
+        properties: [storeTypeProp("multi")],
       },
       {
         kind: "EventsNode",
@@ -647,39 +825,68 @@ async function fetchMarketStats(market, range) {
     trendsFilter: { display: "BoldNumber" },
   });
 
-  const rows = Array.isArray(trends?.results) ? trends.results : [];
-  const byName = Object.fromEntries(
-    rows.map((row) => [row?.action?.name || row?.label || "", seriesTotal(row)]),
-  );
+  const byName = trendsByName(trends);
+
+  const funnels = {
+    product: funnelSteps(byName, [
+      { key: "product_flow", label: "Chose product flow" },
+      { key: "product_configured", label: "Product configured" },
+      { key: "pdp_generated", label: "PDP generated" },
+      { key: "pdp_published", label: "PDP published" },
+    ]),
+    store_single: funnelSteps(byName, [
+      { key: "store_flow", label: "Chose store flow" },
+      { key: "store_configured_single", label: "Single store configured" },
+      { key: "store_generated_single", label: "Single store generated" },
+      { key: "store_published_single", label: "Single store published" },
+    ]),
+    store_multi: funnelSteps(byName, [
+      { key: "store_flow", label: "Chose store flow" },
+      { key: "store_configured_multi", label: "Multi store configured" },
+      { key: "store_generated_multi", label: "Multi store generated" },
+      { key: "store_published_multi", label: "Multi store published" },
+    ]),
+  };
 
   return {
-    market_prefs: byName.market_prefs ?? seriesTotal(rows[0]),
-    product_flow: byName.product_flow ?? seriesTotal(rows[1]),
-    store_flow: byName.store_flow ?? seriesTotal(rows[2]),
-    pdp_generated: byName.pdp_generated ?? seriesTotal(rows[3]),
-    pdp_published: byName.pdp_published ?? seriesTotal(rows[4]),
-    store_generated: byName.store_generated ?? seriesTotal(rows[5]),
-    store_published: byName.store_published ?? seriesTotal(rows[6]),
-    checkout_started: byName.checkout_started ?? seriesTotal(rows[7]),
-    paid: byName.paid ?? seriesTotal(rows[8]),
-    revenue: byName.revenue ?? seriesTotal(rows[9]),
+    market_prefs: byName.market_prefs || 0,
+    product_flow: byName.product_flow || 0,
+    store_flow: byName.store_flow || 0,
+    product_configured: byName.product_configured || 0,
+    pdp_generated: byName.pdp_generated || 0,
+    pdp_published: byName.pdp_published || 0,
+    store_configured_single: byName.store_configured_single || 0,
+    store_configured_multi: byName.store_configured_multi || 0,
+    store_generated: byName.store_generated || 0,
+    store_generated_single: byName.store_generated_single || 0,
+    store_generated_multi: byName.store_generated_multi || 0,
+    store_published: byName.store_published || 0,
+    store_published_single: byName.store_published_single || 0,
+    store_published_multi: byName.store_published_multi || 0,
+    checkout_started: byName.checkout_started || 0,
+    paid: byName.paid || 0,
+    revenue: byName.revenue || 0,
+    funnels,
   };
 }
 
-async function fetchMarketBreakdowns(market, range) {
+async function fetchMarketBreakdowns(market, range, cohortProps = []) {
   const prefsStep = [stepProp("market_preferences_saved")];
   const countryOpts = {
     breakdown: COUNTRY_EXPR,
     breakdownType: "hogql",
     math: "total",
     limit: 50,
+    cohortProps,
   };
   const langOpts = {
     breakdown: LANGUAGE_EXPR,
     breakdownType: "hogql",
     math: "total",
     limit: 50,
+    cohortProps,
   };
+  const withCohort = { cohortProps };
 
   const [
     countriesPrefs,
@@ -749,6 +956,7 @@ async function fetchMarketBreakdowns(market, range) {
       breakdown: THEME_EXPR,
       breakdownType: "hogql",
       limit: 50,
+      ...withCohort,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "pdp_published",
@@ -756,18 +964,21 @@ async function fetchMarketBreakdowns(market, range) {
       breakdown: THEME_EXPR,
       breakdownType: "hogql",
       limit: 50,
+      ...withCohort,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "store_generated",
       name: "store_themes_gen",
       breakdown: "theme_name",
       limit: 50,
+      ...withCohort,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "store_published",
       name: "store_themes_pub",
       breakdown: "theme_name",
       limit: 50,
+      ...withCohort,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "store_generated",
@@ -776,6 +987,7 @@ async function fetchMarketBreakdowns(market, range) {
       breakdownType: "hogql",
       math: "total",
       limit: 50,
+      ...withCohort,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "store_published",
@@ -784,6 +996,7 @@ async function fetchMarketBreakdowns(market, range) {
       breakdownType: "hogql",
       math: "total",
       limit: 50,
+      ...withCohort,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "pdp_generated",
@@ -792,6 +1005,7 @@ async function fetchMarketBreakdowns(market, range) {
       breakdownType: "hogql",
       math: "total",
       limit: 50,
+      ...withCohort,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "pdp_published",
@@ -800,6 +1014,7 @@ async function fetchMarketBreakdowns(market, range) {
       breakdownType: "hogql",
       math: "total",
       limit: 50,
+      ...withCohort,
     }),
     fetchTrendsBreakdown(market, range, {
       event: "credits_pack_purchased",
@@ -808,6 +1023,7 @@ async function fetchMarketBreakdowns(market, range) {
       breakdownType: "hogql",
       math: "total",
       limit: 50,
+      ...withCohort,
     }).catch(async () =>
       // person.properties may fail on some projects — fall back to event-only.
       fetchTrendsBreakdown(market, range, {
@@ -822,6 +1038,7 @@ async function fetchMarketBreakdowns(market, range) {
       breakdown: "pack_name",
       math: "total",
       limit: 20,
+      ...withCohort,
     }),
   ]);
 
@@ -877,21 +1094,23 @@ async function fetchMarketBreakdowns(market, range) {
   };
 }
 
-async function loadMarket(market, range) {
+async function loadMarket(market, range, cohortProps = []) {
   const [stats, breakdowns] = await Promise.all([
-    fetchMarketStats(market, range),
-    fetchMarketBreakdowns(market, range),
+    fetchMarketStats(market, range, cohortProps),
+    fetchMarketBreakdowns(market, range, cohortProps),
   ]);
   // Prefer live PostHog sum(price); fall back to catalog × pack counts for older events.
   const revenueTracked = Number(stats?.revenue) || 0;
   const revenueEstimated = Number(breakdowns?.revenue_estimated) || 0;
   const revenue = revenueTracked > 0 ? revenueTracked : revenueEstimated;
+  const { funnels, ...statFields } = stats || {};
   return {
     stats: {
-      ...stats,
+      ...statFields,
       revenue: Math.round(revenue * 100) / 100,
       revenue_source: revenueTracked > 0 ? "price" : "catalog",
     },
+    funnels: funnels || { product: [], store_single: [], store_multi: [] },
     ...breakdowns,
     dashboard_url: DASHBOARDS[market],
   };
@@ -931,16 +1150,22 @@ export default async function handler(req, res) {
 
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const range = resolveDateRange(url);
+  const cohort = resolveCohort(url);
+  const bounds = absoluteCohortBounds(range);
+  const cohortProps = cohortFilters(cohort, bounds);
 
   try {
     const [cod, prepaid, installs] = await Promise.all([
-      loadMarket("cod", range),
-      loadMarket("prepaid", range),
-      fetchInstallStats(range),
+      loadMarket("cod", range, cohortProps),
+      loadMarket("prepaid", range, cohortProps),
+      fetchInstallStats(range, cohortProps),
     ]);
     json(res, 200, {
       success: true,
       preset: url.searchParams.get("preset") || null,
+      cohort,
+      cohort_from: bounds.from,
+      cohort_to: bounds.to,
       date_from: range.date_from,
       date_to: range.date_to,
       label: range.label,

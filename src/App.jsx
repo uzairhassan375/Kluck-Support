@@ -19,11 +19,24 @@ const PAGES = [
     hint: "No events or replay",
   },
   {
-    id: "stats",
-    label: "Market flow stats",
-    hint: "COD vs prepaid funnel",
+    id: "stats-new",
+    label: "Market flow stats — new",
+    hint: "Installed in selected period",
+  },
+  {
+    id: "stats-old",
+    label: "Market flow stats — old",
+    hint: "Installed earlier, active now",
   },
 ];
+
+function isStatsPage(id) {
+  return id === "stats-new" || id === "stats-old" || id === "stats";
+}
+
+function statsCohortFromPage(id) {
+  return id === "stats-old" ? "old" : "new";
+}
 
 const KPI_GROUPS = [
   {
@@ -35,12 +48,24 @@ const KPI_GROUPS = [
     ],
   },
   {
-    title: "Output",
+    title: "Product (PDP)",
     cards: [
       { key: "pdp_generated", label: "PDP generated" },
       { key: "pdp_published", label: "PDP published" },
-      { key: "store_generated", label: "Store generated" },
-      { key: "store_published", label: "Store published" },
+    ],
+  },
+  {
+    title: "Single product store",
+    cards: [
+      { key: "store_generated_single", label: "Generated" },
+      { key: "store_published_single", label: "Published" },
+    ],
+  },
+  {
+    title: "Multi product store",
+    cards: [
+      { key: "store_generated_multi", label: "Generated" },
+      { key: "store_published_multi", label: "Published" },
     ],
   },
   {
@@ -142,7 +167,15 @@ async function readJson(response) {
 function readPage() {
   try {
     const raw = sessionStorage.getItem(PAGE_KEY);
-    if (raw === "credits" || raw === "posthog" || raw === "stats") return raw;
+    if (raw === "stats") return "stats-new";
+    if (
+      raw === "credits" ||
+      raw === "posthog" ||
+      raw === "stats-new" ||
+      raw === "stats-old"
+    ) {
+      return raw;
+    }
   } catch {
     /* ignore */
   }
@@ -280,19 +313,93 @@ function MarketHighlights({ market, data }) {
         <strong>{formatInt(stats.paid)}</strong>
       </div>
       <div>
-        <span className="highlight-label">Checkout</span>
-        <strong>{formatInt(stats.checkout_started)}</strong>
-      </div>
-      <div>
-        <span className="highlight-label">PDP publish rate</span>
+        <span className="highlight-label">PDP publish</span>
         <strong>{publishRate(stats.pdp_generated, stats.pdp_published)}</strong>
       </div>
       <div>
-        <span className="highlight-label">Store publish rate</span>
+        <span className="highlight-label">Single store publish</span>
         <strong>
-          {publishRate(stats.store_generated, stats.store_published)}
+          {publishRate(
+            stats.store_generated_single,
+            stats.store_published_single,
+          )}
         </strong>
       </div>
+      <div>
+        <span className="highlight-label">Multi store publish</span>
+        <strong>
+          {publishRate(
+            stats.store_generated_multi,
+            stats.store_published_multi,
+          )}
+        </strong>
+      </div>
+    </div>
+  );
+}
+
+function WaterfallFunnel({ market, title, steps }) {
+  const rows = Array.isArray(steps) ? steps : [];
+  const max = Math.max(1, ...rows.map((s) => Number(s.count) || 0));
+  if (rows.length === 0) {
+    return <p className="breakdown-empty">No funnel data</p>;
+  }
+  return (
+    <div className="compare-panel-body">
+      {title ? <h3 className="kpi-group-title">{title}</h3> : null}
+      <ul className="funnel-list">
+        {rows.map((step, index) => {
+          const count = Number(step.count) || 0;
+          const prev = index > 0 ? Number(rows[index - 1].count) || 0 : null;
+          const conv =
+            prev && prev > 0
+              ? `${Math.round((1000 * count) / prev) / 10}% of prior`
+              : null;
+          return (
+            <li key={`${market}-${step.key || step.label}`}>
+              <div className="funnel-meta">
+                <span className="funnel-name">
+                  <span className="funnel-step">{index + 1}</span>
+                  {step.label}
+                </span>
+                <span className="funnel-count">{formatInt(count)}</span>
+              </div>
+              <div className="funnel-bar-track">
+                <div
+                  className="funnel-bar-fill"
+                  style={{
+                    width: `${Math.max(4, (100 * count) / max)}%`,
+                  }}
+                />
+              </div>
+              {conv ? <p className="funnel-conv">{conv}</p> : null}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function MarketFunnels({ market, data }) {
+  const funnels = data?.funnels || {};
+  return (
+    <div className="compare-panel-body market-funnels">
+      <WaterfallFunnel
+        market={`${market}-product`}
+        title="Product (PDP)"
+        steps={funnels.product}
+      />
+      <WaterfallFunnel
+        market={`${market}-single`}
+        title="Single product store"
+        steps={funnels.store_single}
+      />
+      <WaterfallFunnel
+        market={`${market}-multi`}
+        title="Multi product store"
+        steps={funnels.store_multi}
+      />
     </div>
   );
 }
@@ -372,7 +479,7 @@ function CompareRow({ title, hint, cod, prepaid }) {
   );
 }
 
-function InstallsStrip({ data, label }) {
+function InstallsStrip({ data, label, cohort }) {
   const installs = data?.installs;
   const uninstalls = data?.uninstalls;
   const net = data?.net;
@@ -388,7 +495,9 @@ function InstallsStrip({ data, label }) {
       <div className="installs-strip-head">
         <h3>App installs</h3>
         <p className="stats-section-hint">
-          Combined across markets
+          {cohort === "old"
+            ? "Earlier installs only (new installs excluded)"
+            : "New installs in this period"}
           {label ? ` · ${label}` : ""}
         </p>
       </div>
@@ -413,10 +522,10 @@ function InstallsStrip({ data, label }) {
   );
 }
 
-function MarketsCompare({ cod, prepaid, installs, label }) {
+function MarketsCompare({ cod, prepaid, installs, label, cohort }) {
   return (
     <div className="markets-compare">
-      <InstallsStrip data={installs} label={label} />
+      <InstallsStrip data={installs} label={label} cohort={cohort} />
 
       <div className="compare-markets-head">
         <div className="market-head-card market-col-cod">
@@ -462,9 +571,16 @@ function MarketsCompare({ cod, prepaid, installs, label }) {
 
       <CompareRow
         title="KPIs"
-        hint="Onboarding, output, and revenue"
+        hint="Onboarding, PDP, single/multi store, revenue"
         cod={<MarketKpis market="cod" data={cod} />}
         prepaid={<MarketKpis market="prepaid" data={prepaid} />}
+      />
+
+      <CompareRow
+        title="Flow waterfalls"
+        hint="Product vs single-product store vs multi-product store — step conversion"
+        cod={<MarketFunnels market="cod" data={cod} />}
+        prepaid={<MarketFunnels market="prepaid" data={prepaid} />}
       />
 
       <CompareRow
@@ -701,6 +817,8 @@ function IconStats() {
 const ICONS = {
   credits: IconCredits,
   posthog: IconPosthog,
+  "stats-new": IconStats,
+  "stats-old": IconStats,
   stats: IconStats,
 };
 
@@ -767,11 +885,12 @@ export default function App() {
     };
   }, [token, loadExcluded]);
 
-  const loadStats = useCallback(async (authToken, rangeKey) => {
+  const loadStats = useCallback(async (authToken, rangeKey, cohort) => {
     setStatsBusy(true);
     setStatsError("");
     try {
       const params = new URLSearchParams();
+      params.set("cohort", cohort === "old" ? "old" : "new");
       if (rangeKey.startsWith("custom:")) {
         const [, from, to] = rangeKey.split(":");
         params.set("date_from", from);
@@ -802,8 +921,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!token || page !== "stats") return;
-    void loadStats(token, statsRangeKey);
+    if (!token || !isStatsPage(page)) return;
+    setStatsLoaded(false);
+    setStatsData(null);
+    void loadStats(token, statsRangeKey, statsCohortFromPage(page));
   }, [token, page, statsRangeKey, loadStats]);
 
   function selectPreset(value) {
@@ -1066,7 +1187,7 @@ export default function App() {
               <span className="stat-label">excluded</span>
             </div>
           ) : null}
-          {page === "stats" ? (
+          {isStatsPage(page) ? (
             <div className="date-filters">
               <div className="date-pills" role="group" aria-label="Date range">
                 {DATE_PRESETS.map((opt) => (
@@ -1086,7 +1207,9 @@ export default function App() {
                   type="button"
                   className="date-pill date-pill-refresh"
                   disabled={statsBusy || !token}
-                  onClick={() => void loadStats(token, statsRangeKey)}
+                  onClick={() =>
+                    void loadStats(token, statsRangeKey, statsCohortFromPage(page))
+                  }
                   aria-label="Refresh PostHog stats"
                   title="Refresh from PostHog"
                 >
@@ -1127,7 +1250,7 @@ export default function App() {
           ) : null}
         </header>
 
-        <div className={page === "stats" ? "content content-wide" : "content"}>
+        <div className={isStatsPage(page) ? "content content-wide" : "content"}>
           {page === "credits" ? (
             <section className="panel">
               <div className="panel-head">
@@ -1237,7 +1360,7 @@ export default function App() {
             </section>
           ) : null}
 
-          {page === "stats" ? (
+          {isStatsPage(page) ? (
             <div className={`stats-page${statsBusy && statsLoaded ? " stats-page-refreshing" : ""}`}>
               {statsError ? <p className="error">{statsError}</p> : null}
               {!statsLoaded ? (
@@ -1248,6 +1371,7 @@ export default function App() {
                   prepaid={statsData?.prepaid}
                   installs={statsData?.installs}
                   label={statsData?.label}
+                  cohort={statsData?.cohort || statsCohortFromPage(page)}
                 />
               )}
             </div>

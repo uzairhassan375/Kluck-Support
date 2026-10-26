@@ -612,6 +612,14 @@ button {
   gap: 4px;
 }
 
+.market-funnels {
+  gap: 22px;
+}
+
+.market-funnels .kpi-group-title {
+  margin-bottom: 10px;
+}
+
 .highlight-strip {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
