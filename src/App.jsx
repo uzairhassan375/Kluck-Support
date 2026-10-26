@@ -1039,6 +1039,16 @@ export default function App() {
                     {opt.label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className="date-pill date-pill-refresh"
+                  disabled={statsBusy || !token}
+                  onClick={() => void loadStats(token, statsRangeKey)}
+                  aria-label="Refresh PostHog stats"
+                  title="Refresh from PostHog"
+                >
+                  {statsBusy ? "Refreshing…" : "Refresh"}
+                </button>
               </div>
               {statsPreset === "custom" ? (
                 <form className="custom-range" onSubmit={applyCustomRange}>
@@ -1185,9 +1195,9 @@ export default function App() {
           ) : null}
 
           {page === "stats" ? (
-            <div className="stats-page">
+            <div className={`stats-page${statsBusy && statsLoaded ? " stats-page-refreshing" : ""}`}>
               {statsError ? <p className="error">{statsError}</p> : null}
-              {!statsLoaded || statsBusy ? (
+              {!statsLoaded ? (
                 <p className="empty">{statsBusy ? "Loading PostHog…" : "Loading…"}</p>
               ) : (
                 <MarketsCompare

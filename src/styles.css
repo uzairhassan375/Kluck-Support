@@ -377,6 +377,28 @@ button {
   color: #fff;
 }
 
+.date-pill-refresh {
+  border-color: rgba(10, 14, 43, 0.22);
+  background: #fff;
+  color: var(--navy);
+}
+
+.date-pill-refresh:hover:not(:disabled) {
+  background: rgba(10, 14, 43, 0.06);
+}
+
+.date-pill:disabled,
+.date-pill-refresh:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.stats-page-refreshing {
+  opacity: 0.72;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
 .custom-range {
   display: flex;
   flex-wrap: wrap;
