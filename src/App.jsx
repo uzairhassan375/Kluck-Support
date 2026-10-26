@@ -40,29 +40,29 @@ function statsCohortFromPage(id) {
 
 const KPI_GROUPS = [
   {
-    title: "Onboarding",
+    title: "Onboarding (unique users)",
     cards: [
-      { key: "market_prefs", label: "Market prefs" },
-      { key: "product_flow", label: "Product flow" },
-      { key: "store_flow", label: "Store flow" },
+      { key: "market_prefs", label: "Saved market prefs" },
+      { key: "product_flow", label: "Continued → product" },
+      { key: "store_flow", label: "Continued → store" },
     ],
   },
   {
-    title: "Product (PDP)",
+    title: "Product (PDP) users",
     cards: [
-      { key: "pdp_generated", label: "PDP generated" },
-      { key: "pdp_published", label: "PDP published" },
+      { key: "pdp_generated", label: "Generated PDP" },
+      { key: "pdp_published", label: "Published PDP" },
     ],
   },
   {
-    title: "Single product store",
+    title: "Single product store users",
     cards: [
       { key: "store_generated_single", label: "Generated" },
       { key: "store_published_single", label: "Published" },
     ],
   },
   {
-    title: "Multi product store",
+    title: "Multi product store users",
     cards: [
       { key: "store_generated_multi", label: "Generated" },
       { key: "store_published_multi", label: "Published" },
@@ -571,14 +571,14 @@ function MarketsCompare({ cod, prepaid, installs, label, cohort }) {
 
       <CompareRow
         title="KPIs"
-        hint="Onboarding, PDP, single/multi store, revenue"
+        hint="Unique users per step (not click counts). Product + store can both be under prefs if people retry."
         cod={<MarketKpis market="cod" data={cod} />}
         prepaid={<MarketKpis market="prepaid" data={prepaid} />}
       />
 
       <CompareRow
         title="Flow waterfalls"
-        hint="Product vs single-product store vs multi-product store — step conversion"
+        hint="Unique users at each step — product vs single store vs multi store"
         cod={<MarketFunnels market="cod" data={cod} />}
         prepaid={<MarketFunnels market="prepaid" data={prepaid} />}
       />

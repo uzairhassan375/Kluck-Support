@@ -171,37 +171,60 @@ function marketFilter(market) {
   };
 }
 
-function utcTodayIso() {
-  return new Date().toISOString().slice(0, 10);
+/** Match PostHog project timezone (Kluck = Asia/Karachi) so "today" aligns with dStart. */
+const POSTHOG_TZ = process.env.POSTHOG_TIMEZONE || "Asia/Karachi";
+
+function projectTodayIso() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: POSTHOG_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 
-function utcDaysAgoIso(days) {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - days);
-  return d.toISOString().slice(0, 10);
+function projectDaysAgoIso(days) {
+  // Noon UTC avoids DST edge flips when shifting calendar days in POSTHOG_TZ.
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: POSTHOG_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const y = Number(parts.find((p) => p.type === "year")?.value);
+  const m = Number(parts.find((p) => p.type === "month")?.value);
+  const d = Number(parts.find((p) => p.type === "day")?.value);
+  const noonUtc = Date.UTC(y, m - 1, d, 12, 0, 0);
+  const shifted = new Date(noonUtc - days * 86400000);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "UTC",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(shifted);
 }
 
 /**
- * Absolute calendar bounds (UTC) for cohorting on person.properties.first_seen_at.
+ * Absolute calendar bounds in PostHog project TZ for new/old cohorts.
  * Event dateRange still uses PostHog relative tokens (dStart / -7d / …).
  */
 function absoluteCohortBounds(range) {
-  const today = utcTodayIso();
+  const today = projectTodayIso();
   if (range.date_from === "dStart") {
     return { from: today, to: today };
   }
   if (range.date_from === "-1dStart") {
-    const y = utcDaysAgoIso(1);
+    const y = projectDaysAgoIso(1);
     return { from: y, to: y };
   }
   if (range.date_from === "-7d") {
-    return { from: utcDaysAgoIso(6), to: today };
+    return { from: projectDaysAgoIso(6), to: today };
   }
   if (range.date_from === "-30d") {
-    return { from: utcDaysAgoIso(29), to: today };
+    return { from: projectDaysAgoIso(29), to: today };
   }
   if (range.date_from === "-90d") {
-    return { from: utcDaysAgoIso(89), to: today };
+    return { from: projectDaysAgoIso(89), to: today };
   }
   if (isIsoDate(range.date_from)) {
     return {
@@ -209,25 +232,27 @@ function absoluteCohortBounds(range) {
       to: isIsoDate(range.date_to) ? range.date_to : range.date_from,
     };
   }
-  return { from: utcDaysAgoIso(29), to: today };
+  return { from: projectDaysAgoIso(29), to: today };
 }
 
 /**
- * new = first_seen_at inside the selected range (installed in period)
- * old = first_seen_at before the range start (returning / earlier installs)
+ * new = person first appeared in PostHog during the selected range (install day)
+ * old = person existed before the range start (returning shops)
+ *
+ * Uses person.created_at (always set) — not first_seen_at, which is often null
+ * until identify and was undercounting installs.
  */
 function cohortFilters(cohort, bounds) {
   if (!cohort || cohort === "all" || !bounds?.from) return [];
   const from = bounds.from;
   const to = bounds.to || bounds.from;
-  const seen = "toDate(toTimeZone(toDateTime(person.properties.first_seen_at), 'UTC'))";
+  // person.created_at is interpreted in the project timezone by PostHog/HogQL.
+  const created = "toDate(person.created_at)";
   if (cohort === "new") {
     return [
       {
         type: "hogql",
-        key:
-          `person.properties.first_seen_at IS NOT NULL AND ` +
-          `${seen} >= toDate('${from}') AND ${seen} <= toDate('${to}')`,
+        key: `${created} >= toDate('${from}') AND ${created} <= toDate('${to}')`,
       },
     ];
   }
@@ -235,9 +260,7 @@ function cohortFilters(cohort, bounds) {
     return [
       {
         type: "hogql",
-        key:
-          `person.properties.first_seen_at IS NOT NULL AND ` +
-          `${seen} < toDate('${from}')`,
+        key: `${created} < toDate('${from}')`,
       },
     ];
   }
@@ -711,104 +734,105 @@ async function fetchMarketStats(market, range, cohortProps = []) {
         math: "dau",
         properties: [stepProp("market_preferences_saved")],
       },
+      // All progress KPIs use unique users (dau), not click totals.
       {
         kind: "EventsNode",
         event: "onboarding_step_completed",
         name: "product_flow",
-        math: "total",
+        math: "dau",
         properties: [stepProp("product_flow_selected")],
       },
       {
         kind: "EventsNode",
         event: "onboarding_step_completed",
         name: "store_flow",
-        math: "total",
+        math: "dau",
         properties: [stepProp("store_flow_selected")],
       },
       {
         kind: "EventsNode",
         event: "onboarding_step_completed",
         name: "product_configured",
-        math: "total",
+        math: "dau",
         properties: [stepProp("product_configured")],
       },
       {
         kind: "EventsNode",
         event: "pdp_generated",
         name: "pdp_generated",
-        math: "total",
+        math: "dau",
       },
       {
         kind: "EventsNode",
         event: "pdp_published",
         name: "pdp_published",
-        math: "total",
+        math: "dau",
       },
       {
         kind: "EventsNode",
         event: "onboarding_step_completed",
         name: "store_configured_single",
-        math: "total",
+        math: "dau",
         properties: [stepProp("store_configured"), storeTypeExact("single")],
       },
       {
         kind: "EventsNode",
         event: "onboarding_step_completed",
         name: "store_configured_multi",
-        math: "total",
+        math: "dau",
         properties: [stepProp("store_configured"), storeTypeExact("multi")],
       },
       {
         kind: "EventsNode",
         event: "store_generated",
         name: "store_generated",
-        math: "total",
+        math: "dau",
       },
       {
         kind: "EventsNode",
         event: "store_generated",
         name: "store_generated_single",
-        math: "total",
+        math: "dau",
         properties: [storeTypeProp("single")],
       },
       {
         kind: "EventsNode",
         event: "store_generated",
         name: "store_generated_multi",
-        math: "total",
+        math: "dau",
         properties: [storeTypeProp("multi")],
       },
       {
         kind: "EventsNode",
         event: "store_published",
         name: "store_published",
-        math: "total",
+        math: "dau",
       },
       {
         kind: "EventsNode",
         event: "store_published",
         name: "store_published_single",
-        math: "total",
+        math: "dau",
         properties: [storeTypeProp("single")],
       },
       {
         kind: "EventsNode",
         event: "store_published",
         name: "store_published_multi",
-        math: "total",
+        math: "dau",
         properties: [storeTypeProp("multi")],
       },
       {
         kind: "EventsNode",
         event: "credits_pack_checkout_started",
         name: "checkout_started",
-        math: "total",
+        math: "dau",
       },
       {
         kind: "EventsNode",
         event: "credits_pack_purchased",
         name: "paid",
-        math: "total",
+        math: "dau",
       },
       {
         kind: "EventsNode",
