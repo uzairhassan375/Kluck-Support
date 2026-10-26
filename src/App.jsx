@@ -88,6 +88,15 @@ function formatInt(value) {
   return n.toLocaleString();
 }
 
+function formatMoney(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return `$${n.toLocaleString(undefined, {
+    minimumFractionDigits: n % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 function publishRate(generated, published) {
   const g = Number(generated) || 0;
   const p = Number(published) || 0;
@@ -199,7 +208,7 @@ function ShareList({ market, sectionKey, empty, items, missing, kind }) {
   );
 }
 
-function TemplateTable({ market, empty, items }) {
+function TemplateTable({ market, empty, items, nameHeader = "Template" }) {
   const rows = Array.isArray(items) ? items : [];
   const maxGen = Math.max(1, ...rows.map((r) => r.generated || 0));
 
@@ -210,7 +219,7 @@ function TemplateTable({ market, empty, items }) {
       ) : (
         <div className="template-table">
           <div className="template-table-head">
-            <span>Template</span>
+            <span>{nameHeader}</span>
             <span>Generated</span>
             <span>Published</span>
             <span>Rate</span>
@@ -261,7 +270,19 @@ function TemplateTable({ market, empty, items }) {
 function MarketHighlights({ market, data }) {
   const stats = data?.stats || {};
   return (
-    <div className="highlight-strip">
+    <div className="highlight-strip highlight-strip-5">
+      <div>
+        <span className="highlight-label">Revenue</span>
+        <strong>{formatMoney(stats.revenue)}</strong>
+      </div>
+      <div>
+        <span className="highlight-label">Paid</span>
+        <strong>{formatInt(stats.paid)}</strong>
+      </div>
+      <div>
+        <span className="highlight-label">Checkout</span>
+        <strong>{formatInt(stats.checkout_started)}</strong>
+      </div>
       <div>
         <span className="highlight-label">PDP publish rate</span>
         <strong>{publishRate(stats.pdp_generated, stats.pdp_published)}</strong>
@@ -272,15 +293,41 @@ function MarketHighlights({ market, data }) {
           {publishRate(stats.store_generated, stats.store_published)}
         </strong>
       </div>
-      <div>
-        <span className="highlight-label">Paid</span>
-        <strong>{formatInt(stats.paid)}</strong>
-      </div>
-      <div>
-        <span className="highlight-label">Checkout</span>
-        <strong>{formatInt(stats.checkout_started)}</strong>
-      </div>
     </div>
+  );
+}
+
+function PaidPacksList({ market, items, empty }) {
+  const rows = Array.isArray(items) ? items : [];
+  const max = Math.max(1, ...rows.map((r) => r.count || 0));
+  if (rows.length === 0) {
+    return <p className="breakdown-empty">{empty}</p>;
+  }
+  return (
+    <ul className="share-list">
+      {rows.map((row) => (
+        <li key={`${market}-pack-${row.name}`}>
+          <div className="share-row share-row-pack">
+            <span className="share-flag" aria-hidden>
+              💳
+            </span>
+            <span className="share-name" title={row.name}>
+              {row.name}
+            </span>
+            <span className="share-pct">{formatInt(row.count)}</span>
+            <span className="share-count">{formatMoney(row.revenue)}</span>
+          </div>
+          <div className="breakdown-bar-track">
+            <div
+              className="breakdown-bar-fill"
+              style={{
+                width: `${Math.max(4, (100 * (row.count || 0)) / max)}%`,
+              }}
+            />
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -365,7 +412,7 @@ function MarketsCompare({ cod, prepaid }) {
 
       <CompareRow
         title="At a glance"
-        hint="Publish rates, checkout, and paid"
+        hint="Revenue for this date range, paid, checkout, publish rates"
         cod={<MarketHighlights market="cod" data={cod} />}
         prepaid={<MarketHighlights market="prepaid" data={prepaid} />}
       />
@@ -375,6 +422,25 @@ function MarketsCompare({ cod, prepaid }) {
         hint="Onboarding, output, and revenue"
         cod={<MarketKpis market="cod" data={cod} />}
         prepaid={<MarketKpis market="prepaid" data={prepaid} />}
+      />
+
+      <CompareRow
+        title="Paid plans"
+        hint="Starter · Value · Growth — purchases and revenue in this range"
+        cod={
+          <PaidPacksList
+            market="cod"
+            empty="No pack purchases"
+            items={cod?.paid_packs}
+          />
+        }
+        prepaid={
+          <PaidPacksList
+            market="prepaid"
+            empty="No pack purchases"
+            items={prepaid?.paid_packs}
+          />
+        }
       />
 
       <CompareRow
@@ -403,6 +469,31 @@ function MarketsCompare({ cod, prepaid }) {
       />
 
       <CompareRow
+        title="Paid by country"
+        hint="Where credit-pack buyers came from (market prefs country)"
+        cod={
+          <ShareList
+            market="cod"
+            sectionKey="paid_countries"
+            empty="No paid-by-country data yet"
+            items={cod?.paid_countries}
+            missing={cod?.paid_countries_missing}
+            kind="country"
+          />
+        }
+        prepaid={
+          <ShareList
+            market="prepaid"
+            sectionKey="paid_countries"
+            empty="No paid-by-country data yet"
+            items={prepaid?.paid_countries}
+            missing={prepaid?.paid_countries_missing}
+            kind="country"
+          />
+        }
+      />
+
+      <CompareRow
         title="Store language"
         hint="Language chosen for the storefront"
         cod={
@@ -423,6 +514,48 @@ function MarketsCompare({ cod, prepaid }) {
             items={prepaid?.languages}
             missing={prepaid?.languages_missing}
             kind="language"
+          />
+        }
+      />
+
+      <CompareRow
+        title="PDP categories"
+        hint="Health & Beauty, Fashion, Kids Toys, etc. — generated vs published"
+        cod={
+          <TemplateTable
+            market="cod"
+            empty="No PDP categories"
+            items={cod?.pdp_categories}
+            nameHeader="Category"
+          />
+        }
+        prepaid={
+          <TemplateTable
+            market="prepaid"
+            empty="No PDP categories"
+            items={prepaid?.pdp_categories}
+            nameHeader="Category"
+          />
+        }
+      />
+
+      <CompareRow
+        title="Store categories"
+        hint="Same category list as PDP — which niches stores are built in"
+        cod={
+          <TemplateTable
+            market="cod"
+            empty="No store categories"
+            items={cod?.store_categories}
+            nameHeader="Category"
+          />
+        }
+        prepaid={
+          <TemplateTable
+            market="prepaid"
+            empty="No store categories"
+            items={prepaid?.store_categories}
+            nameHeader="Category"
           />
         }
       />
@@ -1053,16 +1186,6 @@ export default function App() {
 
           {page === "stats" ? (
             <div className="stats-page">
-              <p className="stats-note">
-                COD and Prepaid are aligned section by section for comparison.
-                {statsData?.label ? (
-                  <>
-                    {" "}
-                    Range: <strong>{statsData.label}</strong>
-                    {statsData.days ? ` · ${statsData.days}d` : ""}.
-                  </>
-                ) : null}
-              </p>
               {statsError ? <p className="error">{statsError}</p> : null}
               {!statsLoaded || statsBusy ? (
                 <p className="empty">{statsBusy ? "Loading PostHog…" : "Loading…"}</p>

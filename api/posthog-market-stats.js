@@ -202,12 +202,106 @@ const COUNTRY_EXPR =
   "coalesce(nullIf(toString(properties.target_country_name), ''), nullIf(toString(properties.target_country_code), ''), 'Unknown')" +
   ")";
 
+/**
+ * Paid events historically lacked country on the event; fall back to person props
+ * set when market prefs were saved.
+ */
+const PAID_COUNTRY_EXPR =
+  "concat(" +
+  "coalesce(" +
+  "nullIf(toString(properties.target_country_code), ''), " +
+  "nullIf(toString(person.properties.target_country_code), ''), " +
+  "'XX'" +
+  "), " +
+  "'|', " +
+  "coalesce(" +
+  "nullIf(toString(properties.target_country_name), ''), " +
+  "nullIf(toString(person.properties.target_country_name), ''), " +
+  "nullIf(toString(properties.target_country_code), ''), " +
+  "nullIf(toString(person.properties.target_country_code), ''), " +
+  "'Unknown'" +
+  ")" +
+  ")";
+
 const LANGUAGE_EXPR =
   "nullIf(toString(properties.store_language), '')";
+
+/** Prefer human label; fall back to raw category slug. */
+const CATEGORY_EXPR =
+  "coalesce(" +
+  "nullIf(toString(properties.category_label), ''), " +
+  "nullIf(toString(properties.category), '')" +
+  ")";
+
+const CATEGORY_LABELS = {
+  car_accessories: "Car Accessories",
+  fashion: "Fashion",
+  health_beauty: "Health & Beauty",
+  kids_toys: "Kids Toys",
+  home_kitchen: "Home & Kitchen",
+  general: "General",
+};
+
+/** Catalog defaults (USD) — used when older purchase events lack `price`. */
+const PACK_PRICES = {
+  starter: 20,
+  value: 39,
+  agency: 69,
+};
+
+const PACK_LABELS = {
+  starter: "Starter",
+  value: "Value",
+  agency: "Growth",
+};
+
+function packRename(name) {
+  const key = String(name || "")
+    .trim()
+    .toLowerCase();
+  if (!key || isNullBreakdownName(key)) return null;
+  if (PACK_LABELS[key]) return PACK_LABELS[key];
+  if (key === "growth") return "Growth";
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function packKeyFromLabel(name) {
+  const n = String(name || "").trim().toLowerCase();
+  if (n === "starter") return "starter";
+  if (n === "value") return "value";
+  if (n === "agency" || n === "growth") return "agency";
+  for (const [key, label] of Object.entries(PACK_LABELS)) {
+    if (label.toLowerCase() === n) return key;
+  }
+  return null;
+}
+
+function estimateRevenueFromPacks(items) {
+  return (items || []).reduce((sum, item) => {
+    const key = packKeyFromLabel(item.name) || packKeyFromLabel(item.code);
+    const price = key ? PACK_PRICES[key] || 0 : 0;
+    return sum + price * (Number(item.count) || 0);
+  }, 0);
+}
 
 function themeRename(name) {
   if (name === "Template 3" || name === "template 3") return "Glow / Play";
   return name;
+}
+
+function categoryRename(name) {
+  const key = String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, "_")
+    .replace(/\s+/g, "_");
+  if (!key || isNullBreakdownName(key)) return null;
+  if (CATEGORY_LABELS[key]) return CATEGORY_LABELS[key];
+  // Already a display label like "Health & Beauty"
+  if (String(name).includes(" ") || String(name).includes("&")) {
+    return String(name).trim();
+  }
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function mergeGeneratedPublished(generated, published) {
@@ -499,6 +593,13 @@ async function fetchMarketStats(market, range) {
         name: "paid",
         math: "total",
       },
+      {
+        kind: "EventsNode",
+        event: "credits_pack_purchased",
+        name: "revenue",
+        math: "sum",
+        math_property: "price",
+      },
     ],
     dateRange: posthogDateRange(range),
     interval: "day",
@@ -522,6 +623,7 @@ async function fetchMarketStats(market, range) {
     store_published: byName.store_published ?? seriesTotal(rows[6]),
     checkout_started: byName.checkout_started ?? seriesTotal(rows[7]),
     paid: byName.paid ?? seriesTotal(rows[8]),
+    revenue: byName.revenue ?? seriesTotal(rows[9]),
   };
 }
 
@@ -553,6 +655,12 @@ async function fetchMarketBreakdowns(market, range) {
     pdpThemesPub,
     storeThemesGen,
     storeThemesPub,
+    storeCategoriesGen,
+    storeCategoriesPub,
+    pdpCategoriesGen,
+    pdpCategoriesPub,
+    paidCountriesRaw,
+    paidPacksRaw,
   ] = await Promise.all([
     fetchTrendsBreakdown(market, range, {
       event: "onboarding_step_completed",
@@ -622,6 +730,60 @@ async function fetchMarketBreakdowns(market, range) {
       breakdown: "theme_name",
       limit: 50,
     }),
+    fetchTrendsBreakdown(market, range, {
+      event: "store_generated",
+      name: "store_categories_gen",
+      breakdown: CATEGORY_EXPR,
+      breakdownType: "hogql",
+      math: "total",
+      limit: 50,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "store_published",
+      name: "store_categories_pub",
+      breakdown: CATEGORY_EXPR,
+      breakdownType: "hogql",
+      math: "total",
+      limit: 50,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "pdp_generated",
+      name: "pdp_categories_gen",
+      breakdown: CATEGORY_EXPR,
+      breakdownType: "hogql",
+      math: "total",
+      limit: 50,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "pdp_published",
+      name: "pdp_categories_pub",
+      breakdown: CATEGORY_EXPR,
+      breakdownType: "hogql",
+      math: "total",
+      limit: 50,
+    }),
+    fetchTrendsBreakdown(market, range, {
+      event: "credits_pack_purchased",
+      name: "paid_countries",
+      breakdown: PAID_COUNTRY_EXPR,
+      breakdownType: "hogql",
+      math: "total",
+      limit: 50,
+    }).catch(async () =>
+      // person.properties may fail on some projects — fall back to event-only.
+      fetchTrendsBreakdown(market, range, {
+        event: "credits_pack_purchased",
+        name: "paid_countries_event",
+        ...countryOpts,
+      }),
+    ),
+    fetchTrendsBreakdown(market, range, {
+      event: "credits_pack_purchased",
+      name: "paid_packs",
+      breakdown: "pack_name",
+      math: "total",
+      limit: 20,
+    }),
   ]);
 
   const countries = unionBreakdownMax([
@@ -636,12 +798,27 @@ async function fetchMarketBreakdowns(market, range) {
     parseBreakdown(languagesPdpGen, { language: true }),
     parseBreakdown(languagesPdpPub, { language: true }),
   ]);
+  const paidCountries = parseBreakdown(paidCountriesRaw, { country: true });
+  const paidPacks = parseBreakdown(paidPacksRaw, { rename: packRename });
+  const estimatedRevenue = estimateRevenueFromPacks(paidPacks.items);
 
   return {
     countries: countries.items,
     countries_missing: countries.missing,
     languages: languages.items,
     languages_missing: languages.missing,
+    paid_countries: paidCountries.items,
+    paid_countries_missing: paidCountries.missing,
+    paid_packs: paidPacks.items.map((item) => {
+      const key = packKeyFromLabel(item.name);
+      const unit = key ? PACK_PRICES[key] || 0 : 0;
+      return {
+        ...item,
+        code: key,
+        revenue: Math.round(unit * (item.count || 0) * 100) / 100,
+      };
+    }),
+    revenue_estimated: Math.round(estimatedRevenue * 100) / 100,
     pdp_templates: mergeGeneratedPublished(
       parseBreakdown(pdpThemesGen, { rename: themeRename }),
       parseBreakdown(pdpThemesPub, { rename: themeRename }),
@@ -649,6 +826,14 @@ async function fetchMarketBreakdowns(market, range) {
     store_templates: mergeGeneratedPublished(
       parseBreakdown(storeThemesGen, { rename: themeRename }),
       parseBreakdown(storeThemesPub, { rename: themeRename }),
+    ),
+    pdp_categories: mergeGeneratedPublished(
+      parseBreakdown(pdpCategoriesGen, { rename: categoryRename }),
+      parseBreakdown(pdpCategoriesPub, { rename: categoryRename }),
+    ),
+    store_categories: mergeGeneratedPublished(
+      parseBreakdown(storeCategoriesGen, { rename: categoryRename }),
+      parseBreakdown(storeCategoriesPub, { rename: categoryRename }),
     ),
   };
 }
@@ -658,8 +843,16 @@ async function loadMarket(market, range) {
     fetchMarketStats(market, range),
     fetchMarketBreakdowns(market, range),
   ]);
+  // Prefer live PostHog sum(price); fall back to catalog × pack counts for older events.
+  const revenueTracked = Number(stats?.revenue) || 0;
+  const revenueEstimated = Number(breakdowns?.revenue_estimated) || 0;
+  const revenue = revenueTracked > 0 ? revenueTracked : revenueEstimated;
   return {
-    stats,
+    stats: {
+      ...stats,
+      revenue: Math.round(revenue * 100) / 100,
+      revenue_source: revenueTracked > 0 ? "price" : "catalog",
+    },
     ...breakdowns,
     dashboard_url: DASHBOARDS[market],
   };

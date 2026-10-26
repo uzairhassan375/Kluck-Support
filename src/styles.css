@@ -558,6 +558,23 @@ button {
   border: 1px solid var(--line);
 }
 
+.highlight-strip-5 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.share-row-pack .share-pct {
+  min-width: 2em;
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 560;
+  color: var(--ink);
+}
+
+.share-row-pack .share-count {
+  min-width: 3.5em;
+  font-size: 15px;
+}
+
 .highlight-strip > div {
   display: flex;
   flex-direction: column;
