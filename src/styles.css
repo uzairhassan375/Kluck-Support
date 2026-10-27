@@ -1248,7 +1248,8 @@ button {
   grid-column: 1 / -1;
 }
 
-input {
+input,
+select {
   width: 100%;
   margin-top: 7px;
   padding: 12px 13px;
@@ -1258,14 +1259,59 @@ input {
   color: var(--ink);
 }
 
+select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #6b645c 50%),
+    linear-gradient(135deg, #6b645c 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% - 3px),
+    calc(100% - 12px) calc(50% - 3px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 36px;
+}
+
 input::placeholder {
   color: #a39a90;
 }
 
-input:focus {
+input:focus,
+select:focus {
   outline: none;
   border-color: var(--navy);
   box-shadow: 0 0 0 3px rgba(10, 14, 43, 0.16);
+}
+
+.list-head-promo {
+  grid-template-columns: 1fr 1.2fr auto;
+}
+
+.promo-list li {
+  align-items: flex-start;
+}
+
+.promo-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.promo-type {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+
+.promo-effect {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.promo-desc {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
 }
 
 .btn-primary {

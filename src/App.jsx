@@ -14,6 +14,11 @@ const PAGES = [
     hint: "Wallet top-ups",
   },
   {
+    id: "promos",
+    label: "Promo codes",
+    hint: "Double or bonus credits",
+  },
+  {
     id: "posthog",
     label: "PostHog excluded stores",
     hint: "No events or replay",
@@ -146,6 +151,7 @@ function readPage() {
     if (raw === "stats") return "stats-new";
     if (
       raw === "credits" ||
+      raw === "promos" ||
       raw === "posthog" ||
       raw === "stats-new" ||
       raw === "stats-old"
@@ -835,13 +841,49 @@ function IconStats() {
   );
 }
 
+function IconPromos() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 9.5 9.5 4h5L20 9.5v5L14.5 20h-5L4 14.5v-5Z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <circle cx="9.5" cy="9.5" r="1.25" fill="currentColor" />
+      <path
+        d="m10.5 13.5 3-3"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 const ICONS = {
   credits: IconCredits,
+  promos: IconPromos,
   posthog: IconPosthog,
   "stats-new": IconStats,
   "stats-old": IconStats,
   stats: IconStats,
 };
+
+function promoTypeLabel(type) {
+  if (type === "bonus_credits") return "Extra credits";
+  if (type === "multiplier") return "Multiplier";
+  return type || "—";
+}
+
+function promoEffectLabel(promo) {
+  if (!promo) return "—";
+  if (promo.type === "bonus_credits") {
+    return `+${Number(promo.bonus_credits) || 0} credits on redeem`;
+  }
+  const mult = Number(promo.multiplier) || 2;
+  return `${mult}× next pack purchase`;
+}
 
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) || "");
@@ -860,6 +902,17 @@ export default function App() {
   const [excludeError, setExcludeError] = useState("");
   const [excludeOk, setExcludeOk] = useState("");
   const [excludeLoaded, setExcludeLoaded] = useState(false);
+
+  const [promos, setPromos] = useState([]);
+  const [promosLoaded, setPromosLoaded] = useState(false);
+  const [promoBusy, setPromoBusy] = useState(false);
+  const [promoError, setPromoError] = useState("");
+  const [promoOk, setPromoOk] = useState("");
+  const [promoCode, setPromoCode] = useState("");
+  const [promoType, setPromoType] = useState("multiplier");
+  const [promoMultiplier, setPromoMultiplier] = useState("2");
+  const [promoBonus, setPromoBonus] = useState("");
+  const [promoDescription, setPromoDescription] = useState("");
 
   const [statsPreset, setStatsPreset] = useState("today");
   const [statsCustomFrom, setStatsCustomFrom] = useState(() => daysAgoIso(7));
@@ -880,10 +933,22 @@ export default function App() {
     setExcludeLoaded(true);
   }, []);
 
+  const loadPromos = useCallback(async (authToken) => {
+    const data = await readJson(
+      await fetch(`${API_URL}/api/support/promos`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }),
+    );
+    setPromos(Array.isArray(data.promos) ? data.promos : []);
+    setPromosLoaded(true);
+  }, []);
+
   useEffect(() => {
     if (!token) {
       setExcludedShops([]);
       setExcludeLoaded(false);
+      setPromos([]);
+      setPromosLoaded(false);
       return;
     }
     let cancelled = false;
@@ -905,6 +970,28 @@ export default function App() {
       cancelled = true;
     };
   }, [token, loadExcluded]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await loadPromos(token);
+      } catch (err) {
+        if (cancelled) return;
+        if (err.message === "Login required") {
+          sessionStorage.removeItem(TOKEN_KEY);
+          setToken("");
+        } else {
+          setPromoError(err.message);
+          setPromosLoaded(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, loadPromos]);
 
   const loadStats = useCallback(async (authToken, rangeKey, cohort) => {
     setStatsBusy(true);
@@ -1102,6 +1189,77 @@ export default function App() {
     }
   }
 
+  async function addPromo(event) {
+    event.preventDefault();
+    setPromoBusy(true);
+    setPromoError("");
+    setPromoOk("");
+    try {
+      const body = {
+        code: promoCode,
+        type: promoType,
+        description: promoDescription,
+      };
+      if (promoType === "multiplier") {
+        body.multiplier = Number(promoMultiplier) || 2;
+      } else {
+        body.bonus_credits = Number(promoBonus);
+      }
+      const data = await readJson(
+        await fetch(`${API_URL}/api/support/promos`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+        }),
+      );
+      await loadPromos(token);
+      setPromoCode("");
+      setPromoDescription("");
+      setPromoBonus("");
+      setPromoMultiplier("2");
+      setPromoOk(`Saved ${data.promo?.code || body.code}`);
+    } catch (err) {
+      if (err.message === "Login required") {
+        sessionStorage.removeItem(TOKEN_KEY);
+        setToken("");
+      }
+      setPromoError(err.message);
+    } finally {
+      setPromoBusy(false);
+    }
+  }
+
+  async function removePromo(code) {
+    setPromoBusy(true);
+    setPromoError("");
+    setPromoOk("");
+    try {
+      await readJson(
+        await fetch(`${API_URL}/api/support/promos`, {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ code }),
+        }),
+      );
+      await loadPromos(token);
+      setPromoOk(`Removed ${code}`);
+    } catch (err) {
+      if (err.message === "Login required") {
+        sessionStorage.removeItem(TOKEN_KEY);
+        setToken("");
+      }
+      setPromoError(err.message);
+    } finally {
+      setPromoBusy(false);
+    }
+  }
+
   function logout() {
     sessionStorage.removeItem(TOKEN_KEY);
     setToken("");
@@ -1111,6 +1269,10 @@ export default function App() {
     setExcludeOk("");
     setExcludedShops([]);
     setExcludeLoaded(false);
+    setPromos([]);
+    setPromosLoaded(false);
+    setPromoError("");
+    setPromoOk("");
     setStatsData(null);
     setStatsError("");
     setStatsLoaded(false);
@@ -1131,7 +1293,7 @@ export default function App() {
           <p className="brand">Kluck</p>
           <h1>Support admin</h1>
           <p className="sub">
-            Sign in to grant credits, manage PostHog exclusions, and view market flow stats.
+            Sign in to grant credits, manage promo codes, PostHog exclusions, and market flow stats.
           </p>
           {error ? <p className="error">{error}</p> : null}
           <form onSubmit={login}>
@@ -1325,6 +1487,120 @@ export default function App() {
                   {busy ? "Granting…" : "Grant credits"}
                 </button>
               </form>
+            </section>
+          ) : null}
+
+          {page === "promos" ? (
+            <section className="panel">
+              <div className="panel-head">
+                <h2>Promo codes</h2>
+                <p>
+                  Multiplier codes double (or more) the next credit pack.
+                  Extra-credit codes grant credits as soon as a merchant redeems
+                  them.
+                </p>
+              </div>
+              {promoError ? <p className="error">{promoError}</p> : null}
+              {promoOk ? <p className="ok">{promoOk}</p> : null}
+              <form className="panel-form" onSubmit={addPromo}>
+                <label>
+                  Code
+                  <input
+                    value={promoCode}
+                    onChange={(event) => setPromoCode(event.target.value)}
+                    placeholder="KLUCK2X"
+                    autoComplete="off"
+                    required
+                  />
+                </label>
+                <label>
+                  Type
+                  <select
+                    value={promoType}
+                    onChange={(event) => setPromoType(event.target.value)}
+                  >
+                    <option value="multiplier">Double / multiplier credits</option>
+                    <option value="bonus_credits">Extra credits on redeem</option>
+                  </select>
+                </label>
+                {promoType === "multiplier" ? (
+                  <label>
+                    Multiplier
+                    <input
+                      value={promoMultiplier}
+                      onChange={(event) => setPromoMultiplier(event.target.value)}
+                      inputMode="numeric"
+                      placeholder="2"
+                      required
+                    />
+                  </label>
+                ) : (
+                  <label>
+                    Bonus credits
+                    <input
+                      value={promoBonus}
+                      onChange={(event) => setPromoBonus(event.target.value)}
+                      inputMode="numeric"
+                      placeholder="200"
+                      required
+                    />
+                  </label>
+                )}
+                <label className="full">
+                  Description
+                  <input
+                    value={promoDescription}
+                    onChange={(event) => setPromoDescription(event.target.value)}
+                    placeholder="Shown to merchants when they apply the code"
+                  />
+                </label>
+                <button type="submit" className="btn-primary full" disabled={promoBusy}>
+                  {promoBusy ? "Saving…" : "Add promo code"}
+                </button>
+              </form>
+
+              <div className="list-block">
+                <div className="list-head list-head-promo">
+                  <span>Code</span>
+                  <span>Effect</span>
+                  <span>Action</span>
+                </div>
+                {!promosLoaded ? (
+                  <p className="empty">Loading…</p>
+                ) : promos.length === 0 ? (
+                  <div className="empty-state">
+                    <p>No promo codes yet</p>
+                    <span>Add a multiplier or bonus code above.</span>
+                  </div>
+                ) : (
+                  <ul className="shop-list promo-list">
+                    {promos.map((promo) => (
+                      <li key={promo.code}>
+                        <div className="promo-meta">
+                          <code className="shop-domain">{promo.code}</code>
+                          <span className="promo-type">
+                            {promoTypeLabel(promo.type)}
+                          </span>
+                          <span className="promo-effect">
+                            {promoEffectLabel(promo)}
+                          </span>
+                          {promo.description ? (
+                            <span className="promo-desc">{promo.description}</span>
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-ghost danger"
+                          disabled={promoBusy}
+                          onClick={() => removePromo(promo.code)}
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </section>
           ) : null}
 
