@@ -4,7 +4,11 @@
  *
  * PostHog queries are paced (≤2 concurrent) with 429 retry — keep maxDuration high.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHmac, timingSafeEqual } from "node:crypto";
+
+// Per-request PostHog cache mode; module state is shared across concurrent requests.
+const requestContext = new AsyncLocalStorage();
 
 export const config = {
   maxDuration: 60,
@@ -236,7 +240,14 @@ async function posthogQuery(query) {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({
+          query,
+          // "blocking" serves PostHog's cached result if it is still fresh, which
+          // for past days can hide late or backfilled events for hours.
+          refresh: requestContext.getStore()?.forceRefresh
+            ? "force_blocking"
+            : "blocking",
+        }),
       });
 
       const data = await response.json().catch(() => ({}));
@@ -1401,13 +1412,18 @@ export default async function handler(req, res) {
   const cohort = resolveCohort(url);
   const bounds = absoluteCohortBounds(range);
   const cohortProps = cohortFilters(cohort, bounds);
+  const forceRefresh = url.searchParams.get("refresh") === "1";
 
   try {
-    const [cod, prepaid, installs] = await Promise.all([
-      loadMarket("cod", range, cohortProps),
-      loadMarket("prepaid", range, cohortProps),
-      fetchInstallStats(range, cohortProps),
-    ]);
+    const [cod, prepaid, installs] = await requestContext.run(
+      { forceRefresh },
+      () =>
+        Promise.all([
+          loadMarket("cod", range, cohortProps),
+          loadMarket("prepaid", range, cohortProps),
+          fetchInstallStats(range, cohortProps),
+        ]),
+    );
     json(res, 200, {
       success: true,
       preset: url.searchParams.get("preset") || null,

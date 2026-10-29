@@ -1012,12 +1012,13 @@ export default function App() {
     };
   }, [token, loadPromos]);
 
-  const loadStats = useCallback(async (authToken, rangeKey, cohort) => {
+  const loadStats = useCallback(async (authToken, rangeKey, cohort, force = false) => {
     setStatsBusy(true);
     setStatsError("");
     try {
       const params = new URLSearchParams();
       params.set("cohort", cohort === "old" ? "old" : "new");
+      if (force) params.set("refresh", "1");
       if (rangeKey.startsWith("custom:")) {
         const [, from, to] = rangeKey.split(":");
         params.set("date_from", from);
@@ -1439,7 +1440,7 @@ export default function App() {
                   className="date-pill date-pill-refresh"
                   disabled={statsBusy || !token}
                   onClick={() =>
-                    void loadStats(token, statsRangeKey, statsCohortFromPage(page))
+                    void loadStats(token, statsRangeKey, statsCohortFromPage(page), true)
                   }
                   aria-label="Refresh PostHog stats"
                   title="Refresh from PostHog"
