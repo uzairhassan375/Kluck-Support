@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const API_URL = (import.meta.env.VITE_API_URL || "https://api.kluck.ai").replace(
   /\/$/,
@@ -37,6 +37,15 @@ const PAGES = [
 
 function isStatsPage(id) {
   return id === "stats-new" || id === "stats-old" || id === "stats";
+}
+
+/** Same rules as the API's normalize_myshopify_domain. */
+function normalizeShopDomain(value) {
+  let s = String(value || "").trim().toLowerCase();
+  s = s.replace(/^https?:\/\//, "").split("/")[0].trim();
+  if (!s) return "";
+  if (!s.endsWith(".myshopify.com")) s = `${s}.myshopify.com`;
+  return s === ".myshopify.com" ? "" : s;
 }
 
 function statsCohortFromPage(id) {
@@ -617,20 +626,22 @@ function InstallsStrip({ data, label, cohort }) {
         <h3>App installs</h3>
         <p className="stats-section-hint">
           {cohort === "old"
-            ? "Earlier installs only (new installs and reinstalls excluded)"
+            ? "Earlier installs only (new installs and reinstalls are on the New page)"
             : "New installs and reinstalls in this period"}
           {label ? ` · ${label}` : ""}
         </p>
       </div>
-      <div className="installs-metrics-row">
+      <div className={`installs-metrics-row${cohort === "old" ? " three" : ""}`}>
         <div className="installs-metric">
           <span className="highlight-label">Installs</span>
           <strong>{formatInt(installs)}</strong>
         </div>
-        <div className="installs-metric">
-          <span className="highlight-label">Reinstalls</span>
-          <strong>{formatInt(reinstalls)}</strong>
-        </div>
+        {cohort !== "old" ? (
+          <div className="installs-metric">
+            <span className="highlight-label">Reinstalls</span>
+            <strong>{formatInt(reinstalls)}</strong>
+          </div>
+        ) : null}
         <div className="installs-metric">
           <span className="highlight-label">Uninstalls</span>
           <strong>{formatInt(uninstalls)}</strong>
@@ -907,6 +918,9 @@ export default function App() {
   const [excludeError, setExcludeError] = useState("");
   const [excludeOk, setExcludeOk] = useState("");
   const [excludeLoaded, setExcludeLoaded] = useState(false);
+  const [excludeWarn, setExcludeWarn] = useState("");
+  const [highlightShop, setHighlightShop] = useState("");
+  const highlightTimer = useRef(null);
 
   const [promos, setPromos] = useState([]);
   const [promosLoaded, setPromosLoaded] = useState(false);
@@ -1136,11 +1150,31 @@ export default function App() {
     }
   }
 
+  function flashExcludedRow(domain) {
+    // Clear first so a repeat flash on the same row restarts the animation.
+    setHighlightShop("");
+    clearTimeout(highlightTimer.current);
+    highlightTimer.current = setTimeout(() => setHighlightShop(""), 3000);
+    requestAnimationFrame(() => {
+      setHighlightShop(domain);
+      document
+        .querySelector(`[data-shop="${CSS.escape(domain)}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+
   async function addExcluded(event) {
     event.preventDefault();
-    setExcludeBusy(true);
     setExcludeError("");
     setExcludeOk("");
+    setExcludeWarn("");
+    const domain = normalizeShopDomain(excludeShop);
+    if (domain && excludedShops.includes(domain)) {
+      setExcludeWarn(`${domain} is already in the exclusion list`);
+      flashExcludedRow(domain);
+      return;
+    }
+    setExcludeBusy(true);
     try {
       const data = await readJson(
         await fetch(`${API_URL}/api/support/posthog-excluded-stores`, {
@@ -1155,6 +1189,7 @@ export default function App() {
       setExcludedShops(Array.isArray(data.shops) ? data.shops : []);
       setExcludeShop("");
       setExcludeOk(`Excluded ${data.shop}`);
+      if (data.shop) flashExcludedRow(data.shop);
     } catch (err) {
       if (err.message === "Login required") {
         sessionStorage.removeItem(TOKEN_KEY);
@@ -1170,6 +1205,7 @@ export default function App() {
     setExcludeBusy(true);
     setExcludeError("");
     setExcludeOk("");
+    setExcludeWarn("");
     try {
       const data = await readJson(
         await fetch(`${API_URL}/api/support/posthog-excluded-stores`, {
@@ -1272,6 +1308,7 @@ export default function App() {
     setError("");
     setExcludeError("");
     setExcludeOk("");
+    setExcludeWarn("");
     setExcludedShops([]);
     setExcludeLoaded(false);
     setPromos([]);
@@ -1619,12 +1656,16 @@ export default function App() {
               </div>
               {excludeError ? <p className="error">{excludeError}</p> : null}
               {excludeOk ? <p className="ok">{excludeOk}</p> : null}
+              {excludeWarn ? <p className="warn">{excludeWarn}</p> : null}
               <form className="add-row" onSubmit={addExcluded}>
                 <label className="grow">
                   Shop domain
                   <input
                     value={excludeShop}
-                    onChange={(event) => setExcludeShop(event.target.value)}
+                    onChange={(event) => {
+                      setExcludeShop(event.target.value);
+                      setExcludeWarn("");
+                    }}
                     placeholder="store-name.myshopify.com"
                     autoComplete="off"
                     required
@@ -1650,7 +1691,11 @@ export default function App() {
                 ) : (
                   <ul className="shop-list">
                     {excludedShops.map((domain) => (
-                      <li key={domain}>
+                      <li
+                        key={domain}
+                        data-shop={domain}
+                        className={highlightShop === domain ? "highlight" : undefined}
+                      >
                         <code className="shop-domain">{domain}</code>
                         <button
                           type="button"

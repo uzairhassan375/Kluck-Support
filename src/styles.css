@@ -498,6 +498,10 @@ button {
   align-items: stretch;
 }
 
+.installs-metrics-row.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .installs-metric {
   display: flex;
   flex-direction: column;
@@ -1408,6 +1412,22 @@ select:focus {
   background: rgba(255, 255, 255, 0.65);
 }
 
+.shop-list li.highlight {
+  animation: shop-row-flash 3s ease-out;
+}
+
+@keyframes shop-row-flash {
+  0%,
+  60% {
+    background: #fdf1c7;
+    box-shadow: inset 3px 0 0 #d9a514;
+  }
+  100% {
+    background: transparent;
+    box-shadow: inset 3px 0 0 transparent;
+  }
+}
+
 .shop-domain {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 13px;
@@ -1452,7 +1472,8 @@ button:disabled {
 }
 
 .error,
-.ok {
+.ok,
+.warn {
   margin: 0 0 16px;
   padding: 11px 13px;
   border-radius: 11px;
@@ -1468,6 +1489,11 @@ button:disabled {
 .ok {
   background: var(--ok-bg);
   color: var(--ok-fg);
+}
+
+.warn {
+  background: #fdf1c7;
+  color: #7a5a00;
 }
 
 .ok code,
