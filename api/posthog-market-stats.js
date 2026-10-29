@@ -351,11 +351,16 @@ function absoluteCohortBounds(range) {
 }
 
 /**
- * new = person first appeared in PostHog during the selected range (install day)
- * old = person existed before the range start (returning shops)
+ * new = person first appeared in PostHog during the selected range (install day),
+ *       or the shop reinstalled during the range
+ * old = person existed before the range start and did not reinstall in it
  *
  * Uses person.created_at (always set) — not first_seen_at, which is often null
  * until identify and was undercounting installs.
+ *
+ * last_reinstalled_date is a YYYY-MM-DD string in the project TZ, set by the
+ * backend on reinstall. Events before the reinstall don't carry it
+ * (person-on-events), so pre-reinstall activity stays in "old".
  */
 function cohortFilters(cohort, bounds) {
   if (!cohort || cohort === "all" || !bounds?.from) return [];
@@ -363,11 +368,15 @@ function cohortFilters(cohort, bounds) {
   const to = bounds.to || bounds.from;
   // person.created_at is interpreted in the project timezone by PostHog/HogQL.
   const created = "toDate(person.created_at)";
+  const createdInRange = `(${created} >= toDate('${from}') AND ${created} <= toDate('${to}'))`;
+  const reinstalled = "coalesce(toString(person.properties.last_reinstalled_date), '')";
+  const reinstalledInRange = `(${reinstalled} >= '${from}' AND ${reinstalled} <= '${to}')`;
+  const isReinstallEvent = "coalesce(toBool(properties.is_reinstall), false)";
   if (cohort === "new") {
     return [
       {
         type: "hogql",
-        key: `${created} >= toDate('${from}') AND ${created} <= toDate('${to}')`,
+        key: `${createdInRange} OR ${reinstalledInRange} OR ${isReinstallEvent}`,
       },
     ];
   }
@@ -375,7 +384,7 @@ function cohortFilters(cohort, bounds) {
     return [
       {
         type: "hogql",
-        key: `${created} < toDate('${from}')`,
+        key: `${created} < toDate('${from}') AND NOT ${reinstalledInRange} AND NOT ${isReinstallEvent}`,
       },
     ];
   }
@@ -935,7 +944,8 @@ async function fetchTrendsBreakdown(market, range, {
 }
 
 /**
- * App-wide installs / uninstalls (not market-split — events have no market_type).
+ * App-wide installs / reinstalls / uninstalls (not market-split — events have no market_type).
+ * Reinstalls are app_installed with is_reinstall = true (sent since Oct 2026).
  */
 async function fetchInstallStats(range, cohortProps = []) {
   const trends = await posthogQuery({
@@ -946,6 +956,18 @@ async function fetchInstallStats(range, cohortProps = []) {
         event: "app_installed",
         name: "installs",
         math: "total",
+        properties: [
+          { type: "hogql", key: "NOT coalesce(toBool(properties.is_reinstall), false)" },
+        ],
+      },
+      {
+        kind: "EventsNode",
+        event: "app_installed",
+        name: "reinstalls",
+        math: "total",
+        properties: [
+          { type: "hogql", key: "coalesce(toBool(properties.is_reinstall), false)" },
+        ],
       },
       {
         kind: "EventsNode",
@@ -966,11 +988,14 @@ async function fetchInstallStats(range, cohortProps = []) {
     rows.map((row) => [seriesKey(row), seriesTotal(row)]),
   );
   const installs = byName.installs ?? seriesTotal(rows[0]);
-  const uninstalls = byName.uninstalls ?? seriesTotal(rows[1]);
+  const reinstalls = byName.reinstalls ?? seriesTotal(rows[1]);
+  const uninstalls = byName.uninstalls ?? seriesTotal(rows[2]);
   return {
     installs,
+    reinstalls,
+    total_installs: installs + reinstalls,
     uninstalls,
-    net: installs - uninstalls,
+    net: installs + reinstalls - uninstalls,
   };
 }
 

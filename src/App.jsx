@@ -600,6 +600,7 @@ function CompareRow({ title, hint, cod, prepaid, tabs, activeTab, onTabChange })
 
 function InstallsStrip({ data, label, cohort }) {
   const installs = data?.installs;
+  const reinstalls = data?.reinstalls;
   const uninstalls = data?.uninstalls;
   const net = data?.net;
   const netValue = Number(net);
@@ -616,8 +617,8 @@ function InstallsStrip({ data, label, cohort }) {
         <h3>App installs</h3>
         <p className="stats-section-hint">
           {cohort === "old"
-            ? "Earlier installs only (new installs excluded)"
-            : "New installs in this period"}
+            ? "Earlier installs only (new installs and reinstalls excluded)"
+            : "New installs and reinstalls in this period"}
           {label ? ` · ${label}` : ""}
         </p>
       </div>
@@ -625,6 +626,10 @@ function InstallsStrip({ data, label, cohort }) {
         <div className="installs-metric">
           <span className="highlight-label">Installs</span>
           <strong>{formatInt(installs)}</strong>
+        </div>
+        <div className="installs-metric">
+          <span className="highlight-label">Reinstalls</span>
+          <strong>{formatInt(reinstalls)}</strong>
         </div>
         <div className="installs-metric">
           <span className="highlight-label">Uninstalls</span>
